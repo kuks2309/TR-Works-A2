@@ -1,70 +1,59 @@
-"""Calibration bringup + camera static TF.
+"""Calibration bringup with the calibrated D435 camera shown in RViz.
 
-Wraps calibration_bringup.launch.py and adds a static TF:
+Wraps calibration_bringup.launch.py and points RViz at a dedicated config that
+displays the robot, the camera body mesh, and TF axes.
+
+The camera (frame d435_center_link + d435.dae mesh) is now baked into the robot
+description itself — see openarmx_description/urdf/robot/v10.urdf.xacro, guarded
+by `bimanual` since the calibration parent frame openarmx_body_link0 only exists
+in the bimanual urdf. So robot_state_publisher publishes the calibrated transform
     openarmx_body_link0 -> d435_center_link
+    t=(0.034018, 0.036608, 0.644715) m   rpy=(-1.4041, 31.0059, -2.1785) deg
+and renders the mesh; no separate static_transform_publisher is needed here.
 
-Translation (m): x=0.034018, y=0.036608, z=0.644715
-Rotation  (deg): roll=-1.4041, pitch=31.0059, yaw=-2.1785
-(calibrated via solve_extrinsic.py with board at (+0.59, 0, 0) m in base_link,
- board lies flat with z-axis pointing down → --roll 180)
+Because of that, this launch defaults to bimanual:=true — single-arm v10 has no
+body_link0 and therefore no camera.
 
 Run:
     ros2 launch /home/openarmx/TR-Works/kkw/China/calibration/launch/calibration_bringup_with_camera_tf.launch.py
 
-Override anything via launch args, e.g.:
-    ... bimanual:=true arm_type:=v10
+Show only the models (no hardware needed):
+    ... enable_camera:=false enable_charuco:=false
 """
 
-import math
 import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
 
 CALIBRATION_LAUNCH_DIR = os.path.dirname(os.path.realpath(__file__))
+CALIBRATION_DIR = os.path.dirname(CALIBRATION_LAUNCH_DIR)
 BRINGUP_LAUNCH_FILE = os.path.join(
     CALIBRATION_LAUNCH_DIR, "calibration_bringup.launch.py"
 )
-
-
-def deg2rad(deg: float) -> str:
-    return str(deg * math.pi / 180.0)
+CAMERA_RVIZ_CONFIG = os.path.join(
+    CALIBRATION_DIR, "rviz", "calibration_camera.rviz"
+)
 
 
 def generate_launch_description():
     arm_type_arg = DeclareLaunchArgument("arm_type", default_value="v10")
     ee_type_arg = DeclareLaunchArgument("ee_type", default_value="openarmx_hand")
-    bimanual_arg = DeclareLaunchArgument("bimanual", default_value="false")
+    # body_link0 (camera parent frame) only exists in the bimanual urdf.
+    bimanual_arg = DeclareLaunchArgument("bimanual", default_value="true")
     use_gui_arg = DeclareLaunchArgument("use_gui", default_value="false")
     enable_camera_arg = DeclareLaunchArgument("enable_camera", default_value="true")
     enable_charuco_arg = DeclareLaunchArgument("enable_charuco", default_value="true")
     enable_rviz_arg = DeclareLaunchArgument("enable_rviz", default_value="true")
-    rviz_config_arg = DeclareLaunchArgument("rviz_config", default_value="")
+    rviz_config_arg = DeclareLaunchArgument(
+        "rviz_config", default_value=CAMERA_RVIZ_CONFIG
+    )
     camera_name_arg = DeclareLaunchArgument("camera_name", default_value="d435_center")
     camera_namespace_arg = DeclareLaunchArgument(
         "camera_namespace", default_value="d435_center"
-    )
-
-    # openarmx_body_link0 -> d435_center_link (calibrated)
-    camera_static_tf = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="openarmx_body_link0_to_d435_center_link_tf",
-        arguments=[
-            "--x", "0.034018",
-            "--y", "0.036608",
-            "--z", "0.644715",
-            "--roll",  deg2rad(-1.4041),
-            "--pitch", deg2rad(31.0059),
-            "--yaw",   deg2rad(-2.1785),
-            "--frame-id", "openarmx_body_link0",
-            "--child-frame-id", "d435_center_link",
-        ],
-        output="screen",
     )
 
     calibration_bringup = IncludeLaunchDescription(
@@ -94,6 +83,5 @@ def generate_launch_description():
         rviz_config_arg,
         camera_name_arg,
         camera_namespace_arg,
-        camera_static_tf,
         calibration_bringup,
     ])

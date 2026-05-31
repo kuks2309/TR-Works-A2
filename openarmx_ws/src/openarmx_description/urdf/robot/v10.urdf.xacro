@@ -93,4 +93,32 @@
   control_mode="$(arg control_mode)"
   />
 
+  <!-- ============================================================= -->
+  <!-- Calibrated D435 center camera (visual-only).                  -->
+  <!-- Parent frame openarmx_body_link0 only exists in bimanual, so  -->
+  <!-- this block is guarded; single-arm v10 stays unchanged.        -->
+  <!-- Extrinsic (2026-05-27 ChArUco calibration, board @ +0.59m):   -->
+  <!--   body_link0 -> d435_center_link                              -->
+  <!--   t=(0.034018, 0.036608, 0.644715) m                          -->
+  <!--   rpy=(-1.4041, 31.0059, -2.1785) deg                         -->
+  <!-- Mesh visual origin copied from realsense2_description.        -->
+  <!-- No collision geometry: planning/control unaffected.           -->
+  <!-- ============================================================= -->
+  <xacro:if value="$(arg bimanual)">
+    <joint name="d435_center_calib_joint" type="fixed">
+      <parent link="openarmx_body_link0"/>
+      <child link="d435_center_link"/>
+      <origin xyz="0.034018 0.036608 0.644715"
+              rpy="${radians(-1.4041)} ${radians(31.0059)} ${radians(-2.1785)}"/>
+    </joint>
+    <link name="d435_center_link">
+      <visual>
+        <origin xyz="0.0043 -0.0175 0" rpy="${pi/2} 0 ${pi/2}"/>
+        <geometry>
+          <mesh filename="package://realsense2_description/meshes/d435.dae"/>
+        </geometry>
+      </visual>
+    </link>
+  </xacro:if>
+
 </robot>
