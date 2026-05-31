@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMainWindow, QMessageBox, QTabWidget,
 )
 
+from openarmx_scenario_ui.cartesian_control_tab import CartesianControlTab
 from openarmx_scenario_ui.diagnostics_tab import DiagnosticsTab
 from openarmx_scenario_ui.joint_control_tab import JointControlTab
 from openarmx_scenario_ui.launch_manager_tab import LaunchManagerTab
@@ -83,12 +84,14 @@ class ScenarioMainWindow(QMainWindow):
         self._tabs.addTab(scenario_widget, "Scenario Player")
         self._joint_tab = JointControlTab(self._bridge, parent=self)
         self._tabs.addTab(self._joint_tab, "Joint Control")
+        self._cart_tab = CartesianControlTab(self._bridge, parent=self)
+        self._tabs.addTab(self._cart_tab, "Cartesian Control")
         self._launch_tab = LaunchManagerTab(parent=self)
         self._tabs.addTab(self._launch_tab, "Launch Manager")
         self._diag_tab = DiagnosticsTab(self._bridge, parent=self)
         self._tabs.addTab(self._diag_tab, "Diagnostics")
         self.setCentralWidget(self._tabs)
-        self.resize(1040, 800)
+        self.resize(1080, 840)
 
         # ---- bridge signals ----
         self._bridge.sig_status_event.connect(self._on_status_event)
@@ -356,6 +359,7 @@ class ScenarioMainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._status_timer.stop()
         self._joint_tab.shutdown()
+        self._cart_tab.shutdown()
         self._diag_tab.shutdown()
         self._launch_tab.shutdown()
         self._hw.stop()

@@ -22,6 +22,12 @@
   <exec_depend>openarmx_bringup</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
 
+  <!-- Cartesian Control tab -->
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>shape_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

@@ -36,9 +36,77 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
+import tf2_ros
+from geometry_msgs.msg import Pose, Quaternion, Vector3
+from moveit_msgs.action import MoveGroup
+from moveit_msgs.msg import (
+    BoundingVolume, Constraints, OrientationConstraint, PositionConstraint,
+    RobotState,
+)
+from rclpy.duration import Duration
+from rclpy.time import Time
+from shape_msgs.msg import SolidPrimitive
+
 from openarmx_scenario_player_msgs.action import PlayScenario
 from openarmx_scenario_player_msgs.srv import ListScenarios
 from openarmx_scenario_ui import joint_data as jd
+
+
+_MOVEIT_ERR_CODES = {
+    1: "SUCCESS",
+    99999: "FAILURE",
+    -1: "PLANNING_FAILED",
+    -2: "INVALID_MOTION_PLAN",
+    -3: "MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE",
+    -4: "CONTROL_FAILED",
+    -5: "UNABLE_TO_AQUIRE_SENSOR_DATA",
+    -6: "TIMED_OUT",
+    -7: "PREEMPTED",
+    -10: "START_STATE_IN_COLLISION",
+    -11: "START_STATE_VIOLATES_PATH_CONSTRAINTS",
+    -12: "GOAL_IN_COLLISION",
+    -13: "GOAL_VIOLATES_PATH_CONSTRAINTS",
+    -14: "GOAL_CONSTRAINTS_VIOLATED",
+    -15: "INVALID_GROUP_NAME",
+    -16: "INVALID_GOAL_CONSTRAINTS",
+    -17: "INVALID_ROBOT_STATE",
+    -18: "INVALID_LINK_NAME",
+    -19: "INVALID_OBJECT_NAME",
+    -21: "FRAME_TRANSFORM_FAILURE",
+    -22: "COLLISION_CHECKING_UNAVAILABLE",
+    -23: "ROBOT_STATE_STALE",
+    -24: "SENSOR_INFO_STALE",
+    -25: "COMMUNICATION_FAILURE",
+    -31: "NO_IK_SOLUTION",
+}
+
+
+def _moveit_err_str(code: int) -> str:
+    return _MOVEIT_ERR_CODES.get(code, f"code {code}")
+
+
+def _rpy_to_quat(roll: float, pitch: float, yaw: float):
+    cr, sr = math.cos(roll / 2.0),  math.sin(roll / 2.0)
+    cp, sp = math.cos(pitch / 2.0), math.sin(pitch / 2.0)
+    cy, sy = math.cos(yaw / 2.0),   math.sin(yaw / 2.0)
+    return (
+        sr * cp * cy - cr * sp * sy,   # x
+        cr * sp * cy + sr * cp * sy,   # y
+        cr * cp * sy - sr * sp * cy,   # z
+        cr * cp * cy + sr * sp * sy,   # w
+    )
+
+
+def _quat_to_rpy(qx: float, qy: float, qz: float, qw: float):
+    sinr_cosp = 2.0 * (qw * qx + qy * qz)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = 2.0 * (qw * qy - qz * qx)
+    pitch = math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp)
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
 
 
 class ScenarioRosBridge(QObject):
@@ -48,6 +116,8 @@ class ScenarioRosBridge(QObject):
     sig_error = pyqtSignal(str)
     # Joint Control tab: {joint_name: value} — arms in deg, grippers in meters.
     sig_joint_state = pyqtSignal(dict)
+    # Cartesian Control tab: {phase, success, error_code, message}
+    sig_motion_result = pyqtSignal(dict)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -75,6 +145,8 @@ class ScenarioRosBridge(QObject):
         self._setup_joint_control()
         # ---- Diagnostics tab: rate-monitoring subscriptions ----
         self._setup_diagnostics()
+        # ---- Cartesian Control tab: MoveGroup + TF lookup ----
+        self._setup_cartesian_control()
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._spin_loop, daemon=True)
@@ -385,6 +457,170 @@ class ScenarioRosBridge(QObject):
             return self._node.count_publishers(topic)
         except Exception:
             return 0
+
+    # ==================================================================
+    # Cartesian Control tab — MoveGroup action + TF lookup
+    # ==================================================================
+
+    def _setup_cartesian_control(self) -> None:
+        self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self._node)
+        self._move_group_client = ActionClient(
+            self._node, MoveGroup, "/move_action")
+        self._move_goal_handle = None
+
+    def get_ee_pose(self, arm: str, frame_id: str = "") -> Optional[dict]:
+        """TF lookup: pose of openarmx_<arm>_link7 expressed in `frame_id`
+        (default: openarmx_<arm>_link0). Returns dict or None."""
+        target_link = f"openarmx_{arm}_link7"
+        if not frame_id:
+            frame_id = f"openarmx_{arm}_link0"
+        try:
+            if not self._tf_buffer.can_transform(
+                    frame_id, target_link, Time(),
+                    timeout=Duration(seconds=0.1)):
+                return None
+            ts = self._tf_buffer.lookup_transform(
+                frame_id, target_link, Time())
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException):
+            return None
+        tr = ts.transform.translation
+        rq = ts.transform.rotation
+        roll, pitch, yaw = _quat_to_rpy(rq.x, rq.y, rq.z, rq.w)
+        return {
+            "x": tr.x, "y": tr.y, "z": tr.z,
+            "qx": rq.x, "qy": rq.y, "qz": rq.z, "qw": rq.w,
+            "roll": roll, "pitch": pitch, "yaw": yaw,
+            "frame_id": frame_id, "link": target_link,
+        }
+
+    def plan_and_execute_cartesian(
+            self, arm: str, planner_id: str, target_pose: dict,
+            frame_id: str, vel_scale: float = 0.1, acc_scale: float = 0.1,
+            plan_time: float = 5.0, execute: bool = True) -> bool:
+        """Send a MoveGroup goal for pose target. planner_id ∈
+        {PILZ_LIN, PILZ_PTP, PILZ_CIRC, OMPL}. target_pose has
+        keys x/y/z (m) and roll/pitch/yaw (rad)."""
+        if not self._move_group_client.wait_for_server(timeout_sec=2.0):
+            self.sig_motion_result.emit({
+                "phase": "send", "success": False, "error_code": -2,
+                "message": "/move_action unavailable",
+            })
+            return False
+        goal_msg = MoveGroup.Goal()
+        req = goal_msg.request
+        # is_diff=True tells MoveIt "use current PlanningScene state as the
+        # start"; without this, an empty RobotState is interpreted as ZERO
+        # joints and the plan succeeds with a trivial/wrong trajectory.
+        start = RobotState()
+        start.is_diff = True
+        req.start_state = start
+        req.group_name = f"{arm}_arm"
+        pid = (planner_id or "").upper()
+        if pid.startswith("PILZ_"):
+            req.pipeline_id = "pilz_industrial_motion_planner"
+            req.planner_id = pid.split("_", 1)[1]   # LIN / PTP / CIRC
+        elif pid == "OMPL":
+            req.pipeline_id = "ompl"
+            req.planner_id = ""
+        else:
+            req.pipeline_id = planner_id or ""
+            req.planner_id = ""
+        req.num_planning_attempts = 1
+        req.allowed_planning_time = float(plan_time)
+        req.max_velocity_scaling_factor = float(vel_scale)
+        req.max_acceleration_scaling_factor = float(acc_scale)
+        req.goal_constraints = [self._make_pose_goal_constraints(
+            link_name=f"openarmx_{arm}_link7", frame_id=frame_id,
+            pose=target_pose,
+        )]
+        opts = goal_msg.planning_options
+        opts.plan_only = (not execute)
+        opts.look_around = False
+        opts.replan = False
+        send_future = self._move_group_client.send_goal_async(goal_msg)
+        send_future.add_done_callback(self._on_move_goal_response)
+        return True
+
+    @staticmethod
+    def _make_pose_goal_constraints(
+            link_name: str, frame_id: str, pose: dict,
+            tol_pos: float = 0.001, tol_ang: float = 0.01) -> Constraints:
+        qx, qy, qz, qw = _rpy_to_quat(
+            pose["roll"], pose["pitch"], pose["yaw"])
+        c = Constraints()
+        c.name = "pose_goal"
+        pc = PositionConstraint()
+        pc.header.frame_id = frame_id
+        pc.link_name = link_name
+        pc.target_point_offset = Vector3(x=0.0, y=0.0, z=0.0)
+        sphere = SolidPrimitive()
+        sphere.type = SolidPrimitive.SPHERE
+        sphere.dimensions = [tol_pos]
+        bv = BoundingVolume()
+        bv.primitives = [sphere]
+        region_pose = Pose()
+        region_pose.position.x = float(pose["x"])
+        region_pose.position.y = float(pose["y"])
+        region_pose.position.z = float(pose["z"])
+        region_pose.orientation.w = 1.0
+        bv.primitive_poses = [region_pose]
+        pc.constraint_region = bv
+        pc.weight = 1.0
+        c.position_constraints = [pc]
+        oc = OrientationConstraint()
+        oc.header.frame_id = frame_id
+        oc.link_name = link_name
+        oc.orientation = Quaternion(x=qx, y=qy, z=qz, w=qw)
+        oc.absolute_x_axis_tolerance = tol_ang
+        oc.absolute_y_axis_tolerance = tol_ang
+        oc.absolute_z_axis_tolerance = tol_ang
+        oc.weight = 1.0
+        c.orientation_constraints = [oc]
+        return c
+
+    def _on_move_goal_response(self, future) -> None:
+        try:
+            gh = future.result()
+        except Exception as e:
+            self.sig_motion_result.emit({
+                "phase": "send", "success": False, "error_code": -3,
+                "message": str(e),
+            })
+            return
+        if not gh.accepted:
+            self.sig_motion_result.emit({
+                "phase": "send", "success": False, "error_code": -4,
+                "message": "goal rejected",
+            })
+            return
+        self._move_goal_handle = gh
+        result_future = gh.get_result_async()
+        result_future.add_done_callback(self._on_move_result)
+
+    def _on_move_result(self, future) -> None:
+        self._move_goal_handle = None
+        try:
+            wrapped = future.result()
+        except Exception as e:
+            self.sig_motion_result.emit({
+                "phase": "result", "success": False, "error_code": -5,
+                "message": str(e),
+            })
+            return
+        r = wrapped.result
+        code = r.error_code.val if r and r.error_code else -1
+        self.sig_motion_result.emit({
+            "phase": "done",
+            "success": (code == 1),
+            "error_code": code,
+            "message": "OK" if code == 1 else _moveit_err_str(code),
+        })
+
+    def cancel_motion(self) -> None:
+        if self._move_goal_handle is not None:
+            self._move_goal_handle.cancel_goal_async()
 
     # ---------- shutdown ----------
 
