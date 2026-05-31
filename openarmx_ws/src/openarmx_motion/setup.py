@@ -27,7 +27,7 @@ setup(
     entry_points={
         "console_scripts": [
             # adapter: cyclo eef_interactive_marker MoveL -> vr_controller PoseStamped
-            # (added in a later stage when the adapter node is implemented)
+            "marker_to_posestamped = openarmx_motion.marker_to_posestamped:main",
         ],
     },
 )
