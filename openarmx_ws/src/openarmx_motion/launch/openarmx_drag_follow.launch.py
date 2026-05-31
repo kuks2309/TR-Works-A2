@@ -32,6 +32,7 @@ since the marker node starts at the live FK pose, this is automatic.
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -85,6 +86,14 @@ def generate_launch_description():
             description="Empty for stage-1; set when SRDF is added."),
         DeclareLaunchArgument("joint_states_topic", default_value="/joint_states"),
         DeclareLaunchArgument("control_frequency", default_value="100.0"),
+        DeclareLaunchArgument(
+            "start_rviz", default_value="true",
+            description="Start RViz with both EE Leader Marker displays preconfigured."),
+        DeclareLaunchArgument(
+            "rviz_config",
+            default_value=PathJoinSubstitution(
+                [pkg, "config", "drag_follow.rviz"]),
+            description="RViz config with InteractiveMarkers x2 (left + right)."),
     ]
 
     vr = IncludeLaunchDescription(
@@ -105,4 +114,13 @@ def generate_launch_description():
         _adapter_node("left"),
     ]
 
-    return LaunchDescription([*args, vr, *nodes])
+    rviz = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="openarmx_drag_follow_rviz",
+        output="log",
+        arguments=["-d", LaunchConfiguration("rviz_config")],
+        condition=IfCondition(LaunchConfiguration("start_rviz")),
+    )
+
+    return LaunchDescription([*args, vr, *nodes, rviz])

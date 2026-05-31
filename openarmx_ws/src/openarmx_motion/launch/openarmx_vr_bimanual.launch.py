@@ -91,9 +91,10 @@ def generate_launch_description():
             "l_elbow_pose_topic": "/openarmx/left/elbow_pose",
             "joint_states_topic": LaunchConfiguration("joint_states_topic"),
             "reactivate_topic": "/openarmx/reactivate",
-            # output joint trajectory topics
-            "right_traj_topic": "/openarmx/right_arm/joint_trajectory",
-            "left_traj_topic":  "/openarmx/left_arm/joint_trajectory",
+            # output joint trajectory topics -- map to ros2_control JTC inputs
+            # (demo_sim / production both expose <controller_name>/joint_trajectory)
+            "right_traj_topic": "/right_joint_trajectory_controller/joint_trajectory",
+            "left_traj_topic":  "/left_joint_trajectory_controller/joint_trajectory",
             "right_raw_traj_topic": "/openarmx/right_arm/raw_joint_trajectory",
             "left_raw_traj_topic":  "/openarmx/left_arm/raw_joint_trajectory",
             # AI-Worker only -- harmless if joint absent in URDF
