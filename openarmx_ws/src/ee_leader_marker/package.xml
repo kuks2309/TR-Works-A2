@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ee_leader_marker</name>
+  <version>0.1.0</version>
+  <description>
+    EE Leader Marker -- a standalone RViz 6-DoF interactive marker that
+    publishes the drag pose as a plain geometry_msgs/PoseStamped. Robot
+    agnostic, single .cpp file, no Pinocchio / OSQP / robotis_interfaces /
+    custom message dependencies. Drop into any ROS 2 Humble+ workspace and
+    parameterize base_frame / controlled_link / colors per arm.
+
+    Derived from cyclo_motion_controller_ros eef_interactive_marker_node
+    (Apache-2.0) -- the MoveL output was replaced by PoseStamped so the
+    node has no custom-message coupling.
+  </description>
+  <maintainer email="drko0808@gmail.com">openarmx</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>interactive_markers</depend>
+  <depend>visualization_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

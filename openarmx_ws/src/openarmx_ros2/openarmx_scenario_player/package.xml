@@ -21,6 +21,9 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>openarmx_bringup</exec_depend>
 
+  <!-- EE Leader Marker (RViz 6-DoF interactive marker, PoseStamped output) -->
+  <exec_depend>ee_leader_marker</exec_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>
