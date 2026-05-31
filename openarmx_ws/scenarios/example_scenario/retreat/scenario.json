@@ -1,0 +1,7 @@
+{
+  "name": "retreat",
+  "steps": [
+    {"name": "lift",         "type": "wait", "duration_sec": 0.8},
+    {"name": "move_to_home", "type": "wait", "duration_sec": 1.2}
+  ]
+}

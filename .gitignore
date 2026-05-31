@@ -1,0 +1,31 @@
+# ---- ROS2 build artifacts ----
+**/build/
+**/install/
+**/log/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- Virtualenvs / large envs (NEVER commit) ----
+**/venv/
+**/.venv/
+**/*_env/
+Yolo/Yolov8/yolov8_env/
+
+# ---- IDE / editor caches ----
+.vscode/browse.vc.db*
+.vscode/*.vc.db*
+.vscode/ipch/
+*.db-shm
+*.db-wal
+*.swp
+
+# ---- OMC state ----
+.omc/
+**/.omc/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db

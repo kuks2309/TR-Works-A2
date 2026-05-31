@@ -1,0 +1,7 @@
+{
+  "name": "approach",
+  "steps": [
+    {"name": "move_above_target", "type": "wait", "duration_sec": 1.0},
+    {"name": "descend",           "type": "wait", "duration_sec": 0.8}
+  ]
+}

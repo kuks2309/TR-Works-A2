@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>openarmx_scenario_player</name>
+  <version>0.1.0</version>
+  <description>Stub backend for openarmx_scenario_ui — implements the PlayScenario action, ListScenarios service, and /scenario_player/status topic. Step execution is a sleep loop in Phase 0; replace with FollowJointTrajectory / MoveIt Pilz LIN in Phase 1.</description>
+  <maintainer email="trworker3@gmail.com">TR-Works</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>openarmx_scenario_player_msgs</exec_depend>
+
+  <!-- Phase 1 motion backend deps -->
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>openarmx_bringup</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

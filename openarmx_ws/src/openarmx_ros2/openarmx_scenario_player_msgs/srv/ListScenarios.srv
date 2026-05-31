@@ -1,0 +1,11 @@
+# Request: empty
+---
+# UI bridge reshapes to {'scenarios':[{'name','sub_count','sub_names',...}]}.
+ScenarioInfo[] scenarios
+# Legacy parallel arrays — kept for drop-in source-side compatibility.
+# UI consumes these via zip(names, descriptions, sub_counts, sub_names) in
+# scenario_action_client.list_scenarios. sub_names is comma-joined (CSV).
+string[] names
+string[] descriptions
+int32[]  sub_counts
+string[] sub_names

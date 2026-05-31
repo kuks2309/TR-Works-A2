@@ -1,0 +1,5 @@
+{
+  "name": "example_scenario",
+  "description": "openarmx_scenario_ui smoke-test scenario",
+  "sequence": ["approach", "grasp", "retreat"]
+}

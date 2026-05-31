@@ -1,0 +1,52 @@
+# Claude 작업 지침
+
+## 핵심 원칙
+
+1. **사용자가 지시한 사항만 수행한다**
+2. **임의로 기능을 추가하거나 변경하지 않는다**
+3. **작업 완료 후 지시한 내용만 했는지 확인하고 보고한다**
+4. **객관적인 사실을 가지고 판단한다**
+5. **관련 이론을 철저히 조사한다**
+
+## 프로젝트 성격
+
+Box Pose Detection 기능
+
+## 참조 자료 규칙
+
+<!-- TODO(2026-05-07): 사용자 승인 후 채움 -->
+{{DOMAIN_REFERENCES}}
+
+## 문서 작업 규칙 (먼저 읽기)
+
+작업 영역에 따라 **시작 전 반드시** 해당 README 를 먼저 읽고 규칙을 따른다. 규칙은 각 파일이 단일 근원(Single Source of Truth) 이며 본 CLAUDE.md 에 복제하지 않는다.
+
+### Claude 작업 지침 (메타 규칙)
+
+- 진입점 → [docs/claude_guideline/README.md](docs/claude_guideline/README.md)
+  - ROS2 / 임베디드 작업 규칙 → [docs/claude_guideline/ros2.md](docs/claude_guideline/ros2.md) (해당 프로젝트일 때)
+  - 작업 절차 체크리스트 → [docs/claude_guideline/workflow.md](docs/claude_guideline/workflow.md)
+  - 코드 작업 규칙 → [docs/claude_guideline/coding.md](docs/claude_guideline/coding.md)
+  - GitHub 워크플로 → [docs/claude_guideline/github.md](docs/claude_guideline/github.md)
+  - 기술 부채 방지 → [docs/claude_guideline/tech_debt.md](docs/claude_guideline/tech_debt.md)
+  - 매뉴얼 / 데이터시트 보관·인용 → [docs/claude_guideline/manual.md](docs/claude_guideline/manual.md)
+  - 스킬 / 자동화 자산 SSOT 등록 → [docs/claude_guideline/skill_update.md](docs/claude_guideline/skill_update.md)
+  - 문서 작성 방법 → [docs/claude_guideline/documentation.md](docs/claude_guideline/documentation.md)
+  - 프로젝트별 비공개 override → [docs/claude_guideline/local/](docs/claude_guideline/local/)
+
+## 모듈 CLAUDE.md (override 계층)
+
+다음 모듈은 자체 CLAUDE.md 를 가지며 충돌 시 **모듈 규칙이 루트보다 우선**한다.
+
+<!-- TODO(2026-05-07): 모듈 등록 시 갱신 -->
+{{MODULE_CLAUDE_LIST}}
+
+## 도메인 문서 SSOT
+
+| 영역 | 진입점 |
+| --- | --- |
+| 사용자 요청 기록 | [docs/request/README.md](docs/request/README.md) |
+| 이슈 / 수정 기록 | [docs/issues_and_fixes/README.md](docs/issues_and_fixes/README.md) |
+| Claude 실수 기록 (재발 방지) | [docs/claude-mistake/README.md](docs/claude-mistake/README.md) |
+
+규칙 변경이 필요하면 해당 README 수정 여부를 먼저 사용자에게 문의한다.

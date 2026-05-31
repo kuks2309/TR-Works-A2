@@ -1,0 +1,31 @@
+# Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+#
+# Copyright (c) 2026 Chengdu Changshu Robot Co., Ltd.
+# https://www.openarmx.com
+#
+# This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike
+# 4.0 International License (CC BY-NC-SA 4.0).
+# To view a copy of this license, visit:
+#
+# http://creativecommons.org/licenses/by-nc-sa/4.0/
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+# Pilz Industrial Motion Planner pipeline configuration (ROS 2 Humble format).
+# Provides PTP / LIN / CIRC motion primitives.
+# Requires per-joint acceleration limits (see joint_limits.yaml) and
+# cartesian limits (see pilz_cartesian_limits.yaml).
+#
+# NOTE: Humble expects scalar strings (space-separated for multi-value).
+# Newer MoveIt (Jazzy+) uses string arrays; keep this file Humble-compatible.
+planning_plugin: pilz_industrial_motion_planner/CommandPlanner
+request_adapters: >-
+  default_planner_request_adapters/ResolveConstraintFrames
+  default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds
+  default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/FixStartStatePathConstraints
+default_planner_config: LIN
+capabilities: >-
+  pilz_industrial_motion_planner/MoveGroupSequenceAction
+  pilz_industrial_motion_planner/MoveGroupSequenceService

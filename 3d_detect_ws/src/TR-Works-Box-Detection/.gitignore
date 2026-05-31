@@ -1,0 +1,29 @@
+# ROS2 colcon build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# OMC tool cache (per-machine, all directories)
+**/.omc/
+
+# Claude Code per-user override (settings.json 은 commit 됨)
+.claude/settings.local.json
+
+# claude_guideline local override (per local/README.md)
+docs/claude_guideline/local/*
+!docs/claude_guideline/local/README.md
+
+# rosbag data (large binaries)
+rosbag/bags/*/

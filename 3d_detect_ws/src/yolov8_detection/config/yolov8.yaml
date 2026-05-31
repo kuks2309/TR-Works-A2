@@ -1,0 +1,23 @@
+yolov8_node:
+  ros__parameters:
+    # Ultralytics weights: path or short name (e.g. yolov8n.pt, yolov8s.pt).
+    # First run downloads the weights into ~/.cache/ultralytics if not present.
+    model: "yolov8n.pt"
+    device: "cpu"           # "cpu" or "cuda:0"
+    confidence: 0.35
+    iou: 0.5
+    image_size: 640
+    classes: ""             # empty or "all" = every COCO class; e.g. "0" or "0,1,16" to filter
+    prompts: ""             # YOLO-World open-vocab prompts, e.g. "box,cardboard box,carton"
+
+    # D435 topics — realsense2_camera default (camera_namespace=camera, camera_name=camera)
+    image_topic: "/camera/camera/color/image_raw"
+    depth_topic: "/camera/camera/aligned_depth_to_color/image_raw"
+    camera_info_topic: "/camera/camera/color/camera_info"
+
+    # Set true to also subscribe to aligned depth + camera_info and back-project the
+    # detection center into a 3D point in the camera frame, published as JSON.
+    use_depth: false
+    sync_slop: 0.05         # seconds, approximate-time sync tolerance
+
+    publish_annotated: true

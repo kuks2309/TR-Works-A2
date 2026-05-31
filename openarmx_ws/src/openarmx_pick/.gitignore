@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ROS / colcon (this package is built from the parent workspace)
+build/
+install/
+log/
+
+# OMC / tooling state
+.omc/

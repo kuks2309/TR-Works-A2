@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="windowTitle">
+   <string>TR-Works Scenario Player</string>
+  </property>
+  <property name="geometry">
+   <rect>
+    <x>0</x><y>0</y><width>720</width><height>720</height>
+   </rect>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <!-- =================== Process Control =================== -->
+    <item>
+     <widget class="QGroupBox" name="grpProc">
+      <property name="title"><string>Process Control</string></property>
+      <layout class="QGridLayout" name="procLayout">
+       <item row="0" column="0"><widget class="QLabel" name="lblHwTitle"><property name="text"><string>Hardware Bringup</string></property></widget></item>
+       <item row="0" column="1"><widget class="QPushButton" name="btnHwStart"><property name="text"><string>Start</string></property></widget></item>
+       <item row="0" column="2"><widget class="QPushButton" name="btnHwStop"><property name="text"><string>Stop</string></property><property name="styleSheet"><string>color:#c00;</string></property></widget></item>
+       <item row="0" column="3"><widget class="QLabel" name="lblHwStatus"><property name="text"><string>● Stopped</string></property><property name="styleSheet"><string>color:gray;</string></property></widget></item>
+
+       <item row="1" column="0"><widget class="QLabel" name="lblPlayerTitle"><property name="text"><string>Scenario Player</string></property></widget></item>
+       <item row="1" column="1"><widget class="QPushButton" name="btnPlayerStart"><property name="text"><string>Start</string></property></widget></item>
+       <item row="1" column="2"><widget class="QPushButton" name="btnPlayerStop"><property name="text"><string>Stop</string></property><property name="styleSheet"><string>color:#c00;</string></property></widget></item>
+       <item row="1" column="3"><widget class="QLabel" name="lblPlayerStatus"><property name="text"><string>● Stopped</string></property><property name="styleSheet"><string>color:gray;</string></property></widget></item>
+
+       <item row="2" column="0" colspan="4">
+        <widget class="QPushButton" name="btnStopAll">
+         <property name="text"><string>STOP ALL  (kill_all_ros2.sh)</string></property>
+         <property name="styleSheet"><string>background-color:#fee; color:#c00; font-weight:bold; padding:6px;</string></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+
+    <!-- =================== Scenario =================== -->
+    <item>
+     <widget class="QGroupBox" name="grpScenario">
+      <property name="title"><string>Scenario</string></property>
+      <layout class="QGridLayout" name="scnLayout">
+       <item row="0" column="0"><widget class="QLabel" name="lblPath"><property name="text"><string>Path:</string></property></widget></item>
+       <item row="0" column="1" colspan="2">
+        <widget class="QLineEdit" name="txtScenarioPath">
+         <property name="placeholderText"><string>Scenarios 디렉토리 경로</string></property>
+        </widget>
+       </item>
+       <item row="0" column="3"><widget class="QPushButton" name="btnBrowsePath"><property name="text"><string>Browse...</string></property></widget></item>
+
+       <item row="1" column="0"><widget class="QLabel" name="lblScn"><property name="text"><string>Scenario:</string></property></widget></item>
+       <item row="1" column="1" colspan="2"><widget class="QComboBox" name="cmbScenario"/></item>
+       <item row="1" column="3"><widget class="QPushButton" name="btnRefresh"><property name="text"><string>Refresh</string></property></widget></item>
+
+       <item row="2" column="0"><widget class="QLabel" name="lblSub"><property name="text"><string>Sub:</string></property></widget></item>
+       <item row="2" column="1"><widget class="QComboBox" name="cmbSub"/></item>
+       <item row="2" column="2"><widget class="QLabel" name="lblSpeed"><property name="text"><string>Speed:</string></property></widget></item>
+       <item row="2" column="3">
+        <widget class="QDoubleSpinBox" name="spnSpeed">
+         <property name="minimum"><double>0.10</double></property>
+         <property name="maximum"><double>2.00</double></property>
+         <property name="singleStep"><double>0.10</double></property>
+         <property name="value"><double>0.50</double></property>
+        </widget>
+       </item>
+
+       <item row="3" column="0" colspan="4"><widget class="QCheckBox" name="chkDryRun"><property name="text"><string>Dry-run (publish 안 함, 로그만)</string></property></widget></item>
+
+       <item row="4" column="0" colspan="2">
+        <widget class="QPushButton" name="btnPlay">
+         <property name="text"><string>▶  Play</string></property>
+         <property name="styleSheet"><string>background-color:#dfd; color:#060; font-weight:bold; padding:8px;</string></property>
+        </widget>
+       </item>
+       <item row="4" column="2" colspan="2">
+        <widget class="QPushButton" name="btnCancel">
+         <property name="text"><string>■  Cancel</string></property>
+         <property name="styleSheet"><string>background-color:#fed; color:#c00; font-weight:bold; padding:8px;</string></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+
+    <!-- =================== Progress =================== -->
+    <item>
+     <widget class="QGroupBox" name="grpProgress">
+      <property name="title"><string>Progress</string></property>
+      <layout class="QVBoxLayout" name="prgLayout">
+       <item><widget class="QLabel" name="lblProgressText"><property name="text"><string>Idle</string></property></widget></item>
+       <item>
+        <widget class="QProgressBar" name="prgOverall">
+         <property name="minimum"><number>0</number></property>
+         <property name="maximum"><number>100</number></property>
+         <property name="value"><number>0</number></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+
+    <!-- =================== Log =================== -->
+    <item>
+     <widget class="QGroupBox" name="grpLog">
+      <property name="title"><string>Log</string></property>
+      <layout class="QVBoxLayout" name="logLayout">
+       <item>
+        <widget class="QTextEdit" name="txtLog">
+         <property name="readOnly"><bool>true</bool></property>
+         <property name="styleSheet"><string>font-family:monospace; font-size:11px;</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btnClearLog"><property name="text"><string>Clear Log</string></property></widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -1,0 +1,7 @@
+{
+  "name": "grasp",
+  "steps": [
+    {"name": "close_gripper", "type": "wait", "duration_sec": 0.5},
+    {"name": "settle",        "type": "wait", "duration_sec": 0.3}
+  ]
+}

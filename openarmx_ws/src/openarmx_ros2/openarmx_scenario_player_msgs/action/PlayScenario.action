@@ -1,0 +1,42 @@
+# Goal -------------------------------------------------------------------
+# scenario_path:
+#   - bare name (e.g. "pickup_demo") — main_window sends ListScenarios.names[i]
+#   - absolute path to scenario.json — scenario_box_window sends QFileDialog result
+#   server must accept both (split by isabs() + .json suffix).
+string  scenario_path
+
+# 1-based; START_SUB_ALL(=0) means "from the first sub".
+# main_window's 'All' combo entry sends (0,-1).
+int32   start_sub
+# 1-based; END_SUB_SENTINEL(=-1) means "to the last sub".
+# box UI sends start_sub == end_sub == clicked motion index.
+int32   end_sub
+
+# 0.10..2.00 (spnSpeed) or {0.50,0.75,1.00,1.25,1.50} (cmbSpeed parsed by float()).
+# server should clamp via max(speed_scale, SPEED_MIN).
+float32 speed_scale
+
+# true -> emit status / feedback only; do NOT send motion commands.
+bool    dry_run
+
+---
+# Result -----------------------------------------------------------------
+bool    success
+string  message
+int32   subs_completed
+int32   subs_total
+int32   steps_completed
+float32 total_duration_sec
+
+---
+# Feedback ---------------------------------------------------------------
+int32   current_sub          # 1-based current sub index
+int32   total_subs           # number of subs in this goal
+string  sub_name
+int32   current_step         # 0-based step index (UI displays +1)
+int32   total_steps          # step count of current sub
+string  step_name
+string  phase                # 'idle' | 'start_sub' | 'running' | 'end_sub' | 'moving' | 'waiting'
+float32 step_progress        # 0.0..1.0
+float32 overall_progress     # 0.0..1.0 (UI multiplies by 100 for QProgressBar)
+float32 elapsed_sec

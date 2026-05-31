@@ -1,0 +1,28 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${workspaceFolder}/.vscode/browse.vc.db",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/opt/ros/humble/include/**",
+        "/home/openarmx/TR-Works/kkw/China/cyclo_control/cyclo_motion_controller_core/include/**",
+        "/home/openarmx/TR-Works/kkw/China/cyclo_control/cyclo_motion_controller_ros/include/**",
+        "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_ros2/openarmx_gravity_comp/include/**",
+        "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_ros2/openarmx_hardware/include/**",
+        "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_teleop_bimanual/include/**",
+        "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_tools/openarmx_gripper_panel/include/**",
+        "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_tools/openarmx_joint_slider_panel/include/**",
+        "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_tools/openarmx_kp_kd_panel/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ros2",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++17"
+    }
+  ],
+  "version": 4
+}
