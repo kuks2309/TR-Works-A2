@@ -25,15 +25,8 @@ from openarmx_scenario_ui import joint_data as jd
 # Bringup/launch is handled by the dedicated "Launch Manager" tab — this tab
 # no longer owns its own bringup processes (avoids duplicate /controller_manager).
 
-ARM_SCALE = 10        # slider int = degrees * 10
-GRIP_SCALE = 10000    # slider int = meters * 10000  (0.044 m -> 440)
-
-
-def _poses_dir() -> str:
-    env = os.environ.get("OPENARMX_SCENARIOS_DIR")
-    base = env if env and os.path.isdir(env) else os.path.expanduser(
-        "~/openarmx_ws/scenarios")
-    return os.path.join(base, "poses")
+ARM_SCALE = jd.ARM_SCALE
+GRIP_SCALE = jd.GRIP_SCALE
 
 
 class JointControlTab(QWidget):
@@ -339,7 +332,7 @@ class JointControlTab(QWidget):
             "right_deg": [arm[n] for n in jd.RIGHT_ARM_JOINTS],
             "gripper_m": [self._grip_spins[n].value() for n in jd.GRIPPER_NAMES],
         }
-        d = _poses_dir()
+        d = jd._poses_dir()
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"{name}.json")
         with open(path, "w") as f:

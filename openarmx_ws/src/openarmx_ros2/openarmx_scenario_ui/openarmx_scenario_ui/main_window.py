@@ -33,7 +33,46 @@ HW_LAUNCH_CMD = [
     "can_fd:=false",
 ]
 PLAYER_RUN_CMD = ["ros2", "run", "openarmx_scenario_player", "scenario_player_node.py"]
-KILL_ALL_SCRIPT = os.path.expanduser("~/kill_all_ros2.sh")
+
+
+def _resolve_kill_all_script() -> str:
+    """Locate the canonical kill_all_ros2.sh.
+
+    Order: $KILL_ALL_ROS2 → ~/kill_all_ros2.sh (documented install spot) →
+    a `scripts/kill_all_ros2.sh` found by walking up from this file (covers
+    both the source tree and the install space, e.g. <ws>/scripts/). Falls
+    back to ~/kill_all_ros2.sh even if absent so the path is still reported.
+    """
+    env = os.environ.get("KILL_ALL_ROS2")
+    if env and os.path.isfile(env):
+        return env
+    home = os.path.expanduser("~/kill_all_ros2.sh")
+    if os.path.isfile(home):
+        return home
+    here = os.path.abspath(__file__)
+    for _ in range(12):
+        here = os.path.dirname(here)
+        cand = os.path.join(here, "scripts", "kill_all_ros2.sh")
+        if os.path.isfile(cand):
+            return cand
+    return home
+
+
+KILL_ALL_SCRIPT = _resolve_kill_all_script()
+
+
+def _scenario_workflow_cmd() -> list:
+    """RViz + ee_leader markers. ALWAYS spawned regardless of --follower —
+    a missing cyclo dependency must not take down RViz."""
+    return ["ros2", "launch", "openarmx_scenario_player",
+            "openarmx_scenario_workflow.launch.py"]
+
+
+def _cyclo_extras_cmd() -> list:
+    """Optional cyclo_sim + vr_controller (QP+CBF follower). Only spawned
+    when --follower=cyclo. Requires cyclo_motion_controller_ros built."""
+    return ["ros2", "launch", "openarmx_scenario_player",
+            "openarmx_cyclo_extras.launch.py"]
 
 
 def _find_scenarios_dir() -> str:
@@ -66,7 +105,8 @@ AUTO_REFRESH_DELAY_MS = 10000
 
 
 class ScenarioMainWindow(QMainWindow):
-    def __init__(self, auto_start: bool = True) -> None:
+    def __init__(self, auto_start: bool = True, with_rviz: bool = True,
+                 follower: str = "cyclo") -> None:
         super().__init__()
         ui_path = os.path.join(
             get_package_share_directory("openarmx_scenario_ui"),
@@ -76,7 +116,27 @@ class ScenarioMainWindow(QMainWindow):
 
         self._hw = ManagedProcess("hardware_bringup")
         self._player = ManagedProcess("scenario_player")
+        self._workflow = ManagedProcess("scenario_workflow")
+        self._cyclo_extras = ManagedProcess("cyclo_extras")
         self._bridge = ScenarioRosBridge(parent=self)
+
+        # RViz + ee_leader markers (always — never gated by follower mode).
+        # scenario_player is NOT auto-started — it's only needed AFTER a
+        # scenario JSON is registered. Pass --no-rviz to opt out.
+        self._follower = follower
+        if with_rviz:
+            try:
+                self._workflow.start(_scenario_workflow_cmd())
+            except Exception:
+                pass
+            # follower=cyclo: also spawn cyclo_sim + vr_controller. Failure
+            # here (e.g. missing cyclo_motion_controller_ros) does NOT take
+            # down RViz/markers — those already started above.
+            if follower == "cyclo":
+                try:
+                    self._cyclo_extras.start(_cyclo_extras_cmd())
+                except Exception:
+                    pass
 
         # ---- wrap the loaded scenario widget + Joint Control into tabs ----
         scenario_widget = self.takeCentralWidget()
@@ -91,7 +151,11 @@ class ScenarioMainWindow(QMainWindow):
         self._diag_tab = DiagnosticsTab(self._bridge, parent=self)
         self._tabs.addTab(self._diag_tab, "Diagnostics")
         self.setCentralWidget(self._tabs)
-        self.resize(1080, 840)
+        # Minimum size pinned to the user's current working window size so the
+        # UI cannot be shrunk below the point where tab headers / combos start
+        # truncating. Cartesian Jog has step + velocity rows per arm group.
+        self.setMinimumSize(1962, 1365)
+        self.resize(1962, 1365)
 
         # ---- bridge signals ----
         self._bridge.sig_status_event.connect(self._on_status_event)
@@ -356,6 +420,26 @@ class ScenarioMainWindow(QMainWindow):
         sb = self.txtLog.verticalScrollBar()
         sb.setValue(sb.maximum())
 
+    @staticmethod
+    def _clear_ros2_daemon() -> None:
+        """Flush the ros2 discovery daemon so SIGKILL'd nodes stop showing up
+        as ghosts in `ros2 node list`.
+
+        A hard-killed node never destroys its DDS participant, so the daemon
+        keeps advertising it (this is the "shares an exact name" warning and
+        the duplicate /robot_state_publisher after a restart). `ros2 daemon
+        stop` is non-destructive — it does NOT touch any live node; the next
+        ros2 command transparently restarts the daemon and re-discovers only
+        the participants that are actually still alive.
+        """
+        try:
+            subprocess.run(
+                ["ros2", "daemon", "stop"], timeout=8.0, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
     def closeEvent(self, event) -> None:
         self._status_timer.stop()
         self._joint_tab.shutdown()
@@ -364,5 +448,10 @@ class ScenarioMainWindow(QMainWindow):
         self._launch_tab.shutdown()
         self._hw.stop()
         self._player.stop()
+        self._workflow.stop()
+        self._cyclo_extras.stop()
         self._bridge.shutdown()
+        # Processes are down — now flush the daemon so the ones we SIGKILL'd
+        # don't linger as ghost nodes in `ros2 node list`.
+        self._clear_ros2_daemon()
         event.accept()

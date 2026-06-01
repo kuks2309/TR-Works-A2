@@ -84,9 +84,10 @@ def generate_launch_description():
             "collision_safe_distance": 0.02,
             # lift (OpenArmX has none -> 0 vel bound locks it if model contains it)
             "lift_vel_bound": 0.0,
-            # input topics (PoseStamped)
-            "r_goal_pose_topic": "/openarmx/right/goal_pose",
-            "l_goal_pose_topic": "/openarmx/left/goal_pose",
+            # input topics (PoseStamped) -- aligned with ee_leader_marker output
+            # so drag-and-follow works without an extra adapter node
+            "r_goal_pose_topic": "/openarmx/right/ee_leader/goal_pose",
+            "l_goal_pose_topic": "/openarmx/left/ee_leader/goal_pose",
             "r_elbow_pose_topic": "/openarmx/right/elbow_pose",
             "l_elbow_pose_topic": "/openarmx/left/elbow_pose",
             "joint_states_topic": LaunchConfiguration("joint_states_topic"),

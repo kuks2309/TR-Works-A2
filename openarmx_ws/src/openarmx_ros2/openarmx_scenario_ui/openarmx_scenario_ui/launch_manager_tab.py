@@ -36,7 +36,8 @@ PRESETS = [
         "label": "SIL Bringup (fake HW + ctrl)",
         "cmd": ["ros2", "launch", "openarmx_bringup", "openarmx.bimanual.launch.py",
                 "use_fake_hardware:=true",
-                "robot_controller:=joint_trajectory_controller"],
+                "robot_controller:=joint_trajectory_controller",
+                "start_rviz:=false"],
         "confirm": False,
         "nodes": [],
         # specific arg distinguishes SIL from HW (both share openarmx.bimanual.launch)
@@ -52,7 +53,8 @@ PRESETS = [
                 "robot_controller:=joint_trajectory_controller",
                 "control_mode:=mit",
                 "right_can_interface:=can0", "left_can_interface:=can1",
-                "can_fd:=false"],
+                "can_fd:=false",
+                "start_rviz:=false"],
         "confirm": True,
         "nodes": [],
         "procs": ["use_fake_hardware:=false"],
@@ -68,7 +70,7 @@ PRESETS = [
     },
     {
         "key": "scenario_player",
-        "label": "Scenario Player node",
+        "label": "Scenario Player node (backend only)",
         "cmd": ["ros2", "run", "openarmx_scenario_player", "scenario_player_node.py"],
         "confirm": False,
         "nodes": [],

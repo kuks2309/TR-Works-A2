@@ -21,6 +21,7 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -34,6 +35,9 @@ def generate_launch_description():
     )
 
     ee_pkg = FindPackageShare("ee_leader_marker")
+    player_pkg = FindPackageShare("openarmx_scenario_player")
+    motion_pkg = FindPackageShare("openarmx_motion")
+    pick_pkg = FindPackageShare("openarmx_pick")
 
     args = [
         DeclareLaunchArgument(
@@ -41,13 +45,55 @@ def generate_launch_description():
             default_value=default_path,
             description="Directory holding <scenario_name>/scenario.json subtrees",
         ),
-        DeclareLaunchArgument("start_rviz", default_value="true"),
+        DeclareLaunchArgument(
+            # Renamed from "start_rviz" → "spawn_workflow_rviz" to avoid scope
+            # collision with the IncludeLaunchDescription below (ee_leader_marker
+            # bimanual.launch.py also accepts a "start_rviz" arg; if both share
+            # the same name, ros2 launch leaks the sub-launch's "false" back to
+            # this scope and the outer IfCondition silently skips spawning).
+            "spawn_workflow_rviz", default_value="true",
+            description=("True by default -- spawns RViz with the openarmx "
+                         "Cartesian/EE-Leader workflow config "
+                         "(openarmx_scenario_player/config/openarmx_scenario.rviz). "
+                         "Set false when reusing demo_sim's RViz.")),
         DeclareLaunchArgument(
             "rviz_config",
             default_value=PathJoinSubstitution(
-                [ee_pkg, "config", "ee_leader_marker_bimanual.rviz"]),
+                [player_pkg, "config", "openarmx_scenario.rviz"]),
+            description=("RViz config path -- defaults to the "
+                         "Cartesian-Control + EE-Leader-Marker layout."),
         ),
+        DeclareLaunchArgument(
+            "start_sim", default_value="true",
+            description=("True spawns openarmx_cyclo_sim (MoveIt-free mock "
+                         "hardware + JTCs + RSP). Set false when demo_sim or "
+                         "real hardware is already providing /joint_states and "
+                         "the JTCs.")),
+        DeclareLaunchArgument(
+            "start_movel_controllers", default_value="true",
+            description=("True spawns the cyclo single-arm MoveL controllers "
+                         "(openarmx_pick/openarmx_movel_bimanual.launch.py -- "
+                         "two omx_movel_controller_node instances, one per "
+                         "arm). UI's Cartesian Control tab picks which side "
+                         "to command via the /openarmx/{left,right}/movel "
+                         "topics. NOTE: vr_controller (bimanual integrated "
+                         "QP) is intentionally NOT spawned here.")),
+        DeclareLaunchArgument(
+            "start_player", default_value="true",
+            description=("True spawns scenario_player_node. Set false during "
+                         "the scenario AUTHORING stage (markers + movel "
+                         "controllers + RViz only) before any scenarios are "
+                         "registered.")),
     ]
+
+    rviz = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="openarmx_scenario_rviz",
+        output="log",
+        arguments=["-d", LaunchConfiguration("rviz_config")],
+        condition=IfCondition(LaunchConfiguration("spawn_workflow_rviz")),
+    )
 
     scenario = Node(
         package="openarmx_scenario_player",
@@ -57,6 +103,7 @@ def generate_launch_description():
         parameters=[{
             "scenario_search_path": LaunchConfiguration("scenario_search_path"),
         }],
+        condition=IfCondition(LaunchConfiguration("start_player")),
     )
 
     ee_leader = IncludeLaunchDescription(
@@ -69,9 +116,37 @@ def generate_launch_description():
             "right_controlled_link": "openarmx_right_link7",
             "left_goal_topic": "/openarmx/left/ee_leader/goal_pose",
             "right_goal_topic": "/openarmx/right/ee_leader/goal_pose",
-            "start_rviz": LaunchConfiguration("start_rviz"),
-            "rviz_config": LaunchConfiguration("rviz_config"),
+            # This wrapper owns the RViz instance (openarmx_scenario.rviz),
+            # never let ee_leader_marker_bimanual.launch.py spawn its own.
+            "start_rviz": "false",
         }.items(),
     )
 
-    return LaunchDescription([*args, scenario, ee_leader])
+    # MoveIt-free mock hardware + JTCs + RSP. Required for cyclo vr_controller
+    # to have /joint_states feedback and JTC sinks to publish into.
+    cyclo_sim = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [motion_pkg, "launch", "openarmx_cyclo_sim.launch.py"])),
+        condition=IfCondition(LaunchConfiguration("start_sim")),
+    )
+
+    # Cyclo single-arm MoveL controllers, one per arm (left + right). Each
+    # subscribes to /openarmx/<side>/movel (robotis_interfaces/MoveL =
+    # PoseStamped + Duration) and publishes JointTrajectory to the matching
+    # JTC spawned by openarmx_cyclo_sim. UI's Cartesian Control tab picks
+    # which side to command.
+    #
+    # NOTE: cyclo's vr_controller_node (bimanual 14-DOF integrated QP+CBF)
+    # is intentionally NOT spawned -- the user is driving each arm
+    # independently via its own omx_movel_controller_node.
+    movel_controllers = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [pick_pkg, "launch", "openarmx_movel_bimanual.launch.py"])),
+        condition=IfCondition(LaunchConfiguration("start_movel_controllers")),
+    )
+
+    return LaunchDescription([
+        *args, cyclo_sim, scenario, ee_leader, movel_controllers, rviz,
+    ])

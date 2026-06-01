@@ -37,7 +37,7 @@ from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 import tf2_ros
-from geometry_msgs.msg import Pose, Quaternion, Vector3
+from geometry_msgs.msg import Pose, PoseStamped, Quaternion, Vector3
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import (
     BoundingVolume, Constraints, OrientationConstraint, PositionConstraint,
@@ -48,8 +48,11 @@ from rclpy.time import Time
 from shape_msgs.msg import SolidPrimitive
 
 from openarmx_scenario_player_msgs.action import PlayScenario
+from openarmx_scenario_player_msgs.msg import MoveL as MoveLMsg
 from openarmx_scenario_player_msgs.srv import ListScenarios
 from openarmx_scenario_ui import joint_data as jd
+from openarmx_scenario_ui.geometry_utils import rpy_to_quat as _rpy_to_quat
+from openarmx_scenario_ui.geometry_utils import quat_to_rpy as _quat_to_rpy
 
 
 _MOVEIT_ERR_CODES = {
@@ -85,30 +88,6 @@ def _moveit_err_str(code: int) -> str:
     return _MOVEIT_ERR_CODES.get(code, f"code {code}")
 
 
-def _rpy_to_quat(roll: float, pitch: float, yaw: float):
-    cr, sr = math.cos(roll / 2.0),  math.sin(roll / 2.0)
-    cp, sp = math.cos(pitch / 2.0), math.sin(pitch / 2.0)
-    cy, sy = math.cos(yaw / 2.0),   math.sin(yaw / 2.0)
-    return (
-        sr * cp * cy - cr * sp * sy,   # x
-        cr * sp * cy + sr * cp * sy,   # y
-        cr * cp * sy - sr * sp * cy,   # z
-        cr * cp * cy + sr * sp * sy,   # w
-    )
-
-
-def _quat_to_rpy(qx: float, qy: float, qz: float, qw: float):
-    sinr_cosp = 2.0 * (qw * qx + qy * qz)
-    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-    sinp = 2.0 * (qw * qy - qz * qx)
-    pitch = math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp)
-    siny_cosp = 2.0 * (qw * qz + qx * qy)
-    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-    return roll, pitch, yaw
-
-
 class ScenarioRosBridge(QObject):
     sig_status_event = pyqtSignal(dict)
     sig_feedback = pyqtSignal(dict)
@@ -118,6 +97,8 @@ class ScenarioRosBridge(QObject):
     sig_joint_state = pyqtSignal(dict)
     # Cartesian Control tab: {phase, success, error_code, message}
     sig_motion_result = pyqtSignal(dict)
+    # EE Leader Marker (RViz) drag pose. signal(arm: 'left'|'right', pose dict)
+    sig_marker_pose = pyqtSignal(str, dict)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -147,6 +128,8 @@ class ScenarioRosBridge(QObject):
         self._setup_diagnostics()
         # ---- Cartesian Control tab: MoveGroup + TF lookup ----
         self._setup_cartesian_control()
+        # ---- EE Leader Marker subscribers (RViz interactive marker drag) ----
+        self._setup_ee_leader_subs()
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._spin_loop, daemon=True)
@@ -469,21 +452,76 @@ class ScenarioRosBridge(QObject):
             self._node, MoveGroup, "/move_action")
         self._move_goal_handle = None
 
-    def get_ee_pose(self, arm: str, frame_id: str = "") -> Optional[dict]:
-        """TF lookup: pose of openarmx_<arm>_link7 expressed in `frame_id`
-        (default: openarmx_<arm>_link0). Returns dict or None."""
-        target_link = f"openarmx_{arm}_link7"
-        if not frame_id:
-            frame_id = f"openarmx_{arm}_link0"
+    def _lookup_transform_safe(
+            self, dst_frame: str, src_frame: str,
+            timeout_sec: float = 0.1) -> Optional["tf2_ros.TransformStamped"]:
+        """Attempt a TF lookup from src_frame to dst_frame.
+
+        Returns the TransformStamped on success, None if the transform is
+        unavailable or any TF exception is raised.  Centralises the repeated
+        can_transform + lookup_transform + except pattern."""
         try:
             if not self._tf_buffer.can_transform(
-                    frame_id, target_link, Time(),
-                    timeout=Duration(seconds=0.1)):
+                    dst_frame, src_frame, Time(),
+                    timeout=Duration(seconds=timeout_sec)):
                 return None
-            ts = self._tf_buffer.lookup_transform(
-                frame_id, target_link, Time())
+            return self._tf_buffer.lookup_transform(dst_frame, src_frame, Time())
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
                 tf2_ros.ExtrapolationException):
+            return None
+
+    def transform_pose(self, pose: dict, src_frame: str,
+                       dst_frame: str) -> Optional[dict]:
+        """Transform a {x,y,z,roll,pitch,yaw} pose from src_frame to dst_frame
+        via TF. Used when the user picks a non-base frame for jog but the
+        downstream controller (e.g. cyclo) interprets coords in its own
+        configured base_frame and ignores PoseStamped.frame_id."""
+        if src_frame == dst_frame:
+            return pose
+        ts = self._lookup_transform_safe(dst_frame, src_frame)
+        if ts is None:
+            return None
+        # T_dst_src
+        tx, ty, tz = ts.transform.translation.x, ts.transform.translation.y, ts.transform.translation.z
+        qx, qy, qz, qw = (ts.transform.rotation.x, ts.transform.rotation.y,
+                          ts.transform.rotation.z, ts.transform.rotation.w)
+        # rotate (pose pos) by quat then translate
+        px, py, pz = pose["x"], pose["y"], pose["z"]
+        # quat rotation of vector p: p' = q * p * q^-1 (compact form)
+        rxx = 1 - 2*(qy*qy + qz*qz)
+        rxy = 2*(qx*qy - qz*qw)
+        rxz = 2*(qx*qz + qy*qw)
+        ryx = 2*(qx*qy + qz*qw)
+        ryy = 1 - 2*(qx*qx + qz*qz)
+        ryz = 2*(qy*qz - qx*qw)
+        rzx = 2*(qx*qz - qy*qw)
+        rzy = 2*(qy*qz + qx*qw)
+        rzz = 1 - 2*(qx*qx + qy*qy)
+        new_x = rxx*px + rxy*py + rxz*pz + tx
+        new_y = ryx*px + ryy*py + ryz*pz + ty
+        new_z = rzx*px + rzy*py + rzz*pz + tz
+        # rotate orientation: q_dst = q_transform * q_src
+        pqx, pqy, pqz, pqw = _rpy_to_quat(pose["roll"], pose["pitch"], pose["yaw"])
+        # quaternion multiply (qw1, qx1...) * (qw2, qx2...)
+        nw = qw*pqw - qx*pqx - qy*pqy - qz*pqz
+        nx = qw*pqx + qx*pqw + qy*pqz - qz*pqy
+        ny = qw*pqy - qx*pqz + qy*pqw + qz*pqx
+        nz = qw*pqz + qx*pqy - qy*pqx + qz*pqw
+        roll, pitch, yaw = _quat_to_rpy(nx, ny, nz, nw)
+        return {"x": new_x, "y": new_y, "z": new_z,
+                "qx": nx, "qy": ny, "qz": nz, "qw": nw,
+                "roll": roll, "pitch": pitch, "yaw": yaw,
+                "frame_id": dst_frame}
+
+    def get_ee_pose(self, arm: str, frame_id: str = "",
+                    controlled_link: str = "") -> Optional[dict]:
+        """TF lookup: pose of `controlled_link` (default: openarmx_<arm>_link7)
+        expressed in `frame_id` (default: openarmx_<arm>_link0). Returns dict or None."""
+        target_link = controlled_link or f"openarmx_{arm}_link7"
+        if not frame_id:
+            frame_id = f"openarmx_{arm}_link0"
+        ts = self._lookup_transform_safe(frame_id, target_link)
+        if ts is None:
             return None
         tr = ts.transform.translation
         rq = ts.transform.rotation
@@ -502,12 +540,18 @@ class ScenarioRosBridge(QObject):
         """Send a MoveGroup goal for pose target. planner_id ∈
         {PILZ_LIN, PILZ_PTP, PILZ_CIRC, OMPL}. target_pose has
         keys x/y/z (m) and roll/pitch/yaw (rad)."""
+        # Stage A timing: function entry.
+        self._mg_t0 = time.monotonic()
         if not self._move_group_client.wait_for_server(timeout_sec=2.0):
             self.sig_motion_result.emit({
                 "phase": "send", "success": False, "error_code": -2,
                 "message": "/move_action unavailable",
             })
             return False
+        # Stage B timing: server discovered, about to build goal.
+        t_after_server = time.monotonic()
+        print(f"[MG TIMING] entry→server_ready: {(t_after_server - self._mg_t0)*1000:.1f} ms",
+              flush=True)
         goal_msg = MoveGroup.Goal()
         req = goal_msg.request
         # is_diff=True tells MoveIt "use current PlanningScene state as the
@@ -539,7 +583,13 @@ class ScenarioRosBridge(QObject):
         opts.plan_only = (not execute)
         opts.look_around = False
         opts.replan = False
+        t_before_send = time.monotonic()
+        print(f"[MG TIMING] server_ready→goal_built: "
+              f"{(t_before_send - t_after_server)*1000:.1f} ms", flush=True)
         send_future = self._move_group_client.send_goal_async(goal_msg)
+        self._mg_t_send = time.monotonic()
+        print(f"[MG TIMING] send_goal_async returned: "
+              f"{(self._mg_t_send - t_before_send)*1000:.1f} ms", flush=True)
         send_future.add_done_callback(self._on_move_goal_response)
         return True
 
@@ -581,6 +631,11 @@ class ScenarioRosBridge(QObject):
         return c
 
     def _on_move_goal_response(self, future) -> None:
+        t_goal_resp = time.monotonic()
+        if hasattr(self, "_mg_t_send"):
+            print(f"[MG TIMING] goal_response (DDS accept round-trip): "
+                  f"{(t_goal_resp - self._mg_t_send)*1000:.1f} ms", flush=True)
+        self._mg_t_accept = t_goal_resp
         try:
             gh = future.result()
         except Exception as e:
@@ -600,6 +655,13 @@ class ScenarioRosBridge(QObject):
         result_future.add_done_callback(self._on_move_result)
 
     def _on_move_result(self, future) -> None:
+        t_result = time.monotonic()
+        if hasattr(self, "_mg_t_accept"):
+            print(f"[MG TIMING] accept→result (planning+execute): "
+                  f"{(t_result - self._mg_t_accept)*1000:.1f} ms", flush=True)
+        if hasattr(self, "_mg_t0"):
+            print(f"[MG TIMING] TOTAL entry→result: "
+                  f"{(t_result - self._mg_t0)*1000:.1f} ms", flush=True)
         self._move_goal_handle = None
         try:
             wrapped = future.result()
@@ -610,6 +672,13 @@ class ScenarioRosBridge(QObject):
             })
             return
         r = wrapped.result
+        # Planning time breakdown: Pilz solver-only time vs total round-trip.
+        if r and hasattr(r, "planning_time"):
+            pt_ms = float(r.planning_time) * 1000.0
+            if hasattr(self, "_mg_t_accept"):
+                wall_ms = (t_result - self._mg_t_accept) * 1000.0
+                print(f"[MG TIMING]   planning_time(solver): {pt_ms:.1f} ms  "
+                      f"=> execute+wrap: {wall_ms - pt_ms:.1f} ms", flush=True)
         code = r.error_code.val if r and r.error_code else -1
         self.sig_motion_result.emit({
             "phase": "done",
@@ -621,6 +690,81 @@ class ScenarioRosBridge(QObject):
     def cancel_motion(self) -> None:
         if self._move_goal_handle is not None:
             self._move_goal_handle.cancel_goal_async()
+
+    # ==================================================================
+    # EE Leader Marker — subscribe to /openarmx/{arm}/ee_leader/goal_pose
+    # ==================================================================
+
+    _EE_LEADER_TOPICS = {
+        "left":  "/openarmx/left/ee_leader/goal_pose",
+        "right": "/openarmx/right/ee_leader/goal_pose",
+    }
+
+    def _setup_ee_leader_subs(self) -> None:
+        self._marker_pose = {arm: None for arm in self._EE_LEADER_TOPICS}
+        self._marker_pubs = {}
+        for arm, topic in self._EE_LEADER_TOPICS.items():
+            self._node.create_subscription(
+                PoseStamped, topic,
+                lambda msg, a=arm: self._on_ee_leader_pose(msg, a),
+                10,
+            )
+            # Also expose a publisher so the UI can drive the follower
+            # without going through MoveGroup (used by Cartesian Jog
+            # "EE Leader publish" backend → cyclo vr_controller etc.).
+            self._marker_pubs[arm] = self._node.create_publisher(
+                PoseStamped, topic, 10)
+        # cyclo MoveL backend: publish openarmx_scenario_player_msgs/MoveL
+        # to /openarmx/{arm}/movel — matches the remap used by
+        # scenario_player_with_ee_leader.launch.py and openarmx_cyclo_movel.launch.py.
+        self._cyclo_movel_pubs = {
+            "left":  self._node.create_publisher(
+                MoveLMsg, "/openarmx/left/movel", 10),
+            "right": self._node.create_publisher(
+                MoveLMsg, "/openarmx/right/movel", 10),
+        }
+
+    def publish_cyclo_movel(self, arm: str, pose: dict, frame_id: str,
+                            duration_sec: float = 2.0) -> bool:
+        """Send a cyclo MoveL goal. pose has x/y/z + roll/pitch/yaw (rad)."""
+        if arm not in self._cyclo_movel_pubs:
+            return False
+        qx, qy, qz, qw = _rpy_to_quat(
+            pose["roll"], pose["pitch"], pose["yaw"])
+        msg = MoveLMsg()
+        msg.pose.header.stamp = self._node.get_clock().now().to_msg()
+        msg.pose.header.frame_id = frame_id or f"openarmx_{arm}_link0"
+        msg.pose.pose.position.x = float(pose["x"])
+        msg.pose.pose.position.y = float(pose["y"])
+        msg.pose.pose.position.z = float(pose["z"])
+        msg.pose.pose.orientation.x = qx
+        msg.pose.pose.orientation.y = qy
+        msg.pose.pose.orientation.z = qz
+        msg.pose.pose.orientation.w = qw
+        sec = int(duration_sec)
+        msg.time_from_start.sec = sec
+        msg.time_from_start.nanosec = int((duration_sec - sec) * 1e9)
+        self._cyclo_movel_pubs[arm].publish(msg)
+        return True
+
+    def _on_ee_leader_pose(self, msg: PoseStamped, arm: str) -> None:
+        p = msg.pose
+        roll, pitch, yaw = _quat_to_rpy(
+            p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w)
+        pose = {
+            "x": p.position.x, "y": p.position.y, "z": p.position.z,
+            "qx": p.orientation.x, "qy": p.orientation.y,
+            "qz": p.orientation.z, "qw": p.orientation.w,
+            "roll": roll, "pitch": pitch, "yaw": yaw,
+            "frame_id": msg.header.frame_id or "openarmx_body_link0",
+        }
+        self._marker_pose[arm] = pose
+        self.sig_marker_pose.emit(arm, pose)
+
+    def get_marker_pose(self, arm: str) -> Optional[dict]:
+        """Last-received marker pose for `arm` ('left' | 'right'), or None
+        if nothing has been published yet."""
+        return self._marker_pose.get(arm)
 
     # ---------- shutdown ----------
 

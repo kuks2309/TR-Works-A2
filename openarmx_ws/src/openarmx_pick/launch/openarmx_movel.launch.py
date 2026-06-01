@@ -12,7 +12,7 @@ so MoveL goal poses can be fed straight through with no extra TF.
 
 I/O:
   sub  <joint_states_topic>            sensor_msgs/JointState   (current feedback)
-  sub  <movel_topic>                   robotis_interfaces/MoveL (goal pose)
+  sub  <movel_topic>                   openarmx_scenario_player_msgs/MoveL (goal pose)
   pub  <joint_command_topic>           trajectory_msgs/JointTrajectory (command)
   pub  <ee_pose_topic>                 geometry_msgs/PoseStamped (current EE)
 
@@ -45,7 +45,7 @@ def generate_launch_description():
             "joint_command_topic",
             default_value="/openarmx/left_arm/joint_trajectory",
             description="Map to the OpenArmX left-arm forward controller input."),
-        DeclareLaunchArgument("movel_topic", default_value="/openarmx/movel"),
+        DeclareLaunchArgument("movel_topic", default_value="/openarmx/left/movel"),
         DeclareLaunchArgument("ee_pose_topic", default_value="/openarmx/left_ee_pose"),
         DeclareLaunchArgument("control_frequency", default_value="100.0"),
     ]

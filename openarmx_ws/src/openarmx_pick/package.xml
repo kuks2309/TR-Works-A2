@@ -18,7 +18,7 @@
   <exec_depend>tf2_ros</exec_depend>
   <!-- QP MoveL solver node (cyclo_control) + its MoveL command msg -->
   <exec_depend>cyclo_motion_controller_ros</exec_depend>
-  <exec_depend>robotis_interfaces</exec_depend>
+  <exec_depend>openarmx_scenario_player_msgs</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

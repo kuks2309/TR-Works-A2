@@ -61,6 +61,14 @@ public:
     marker_color_r_ = this->declare_parameter<double>("marker_color_r", 0.2);
     marker_color_g_ = this->declare_parameter<double>("marker_color_g", 0.8);
     marker_color_b_ = this->declare_parameter<double>("marker_color_b", 0.2);
+    // While idle (no user drag), keep the marker glued to the current
+    // controlled_link TF so the marker tracks any motion of the robot
+    // (joint slider, jog, etc). Disable to freeze the marker at the last
+    // user-set pose regardless of robot motion.
+    auto_follow_link_ =
+      this->declare_parameter<bool>("auto_follow_link", true);
+    follow_rate_hz_ =
+      this->declare_parameter<double>("follow_rate_hz", 10.0);
 
     goal_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(goal_topic_, 10);
 
@@ -77,9 +85,11 @@ public:
                 rclcpp::QoS(100),
                 rclcpp::QoS(10));
 
+    const int period_ms =
+      std::max(20, static_cast<int>(1000.0 / std::max(1e-3, follow_rate_hz_)));
     update_timer_ = this->create_wall_timer(
-                std::chrono::milliseconds(50),
-                std::bind(&InteractiveMarkerNode::initializeMarkerIfReady, this));
+                std::chrono::milliseconds(period_ms),
+                std::bind(&InteractiveMarkerNode::onTick, this));
 
     RCLCPP_INFO(this->get_logger(), "EE Leader Marker node started");
     RCLCPP_INFO(this->get_logger(), "  - Base frame: %s", base_frame_.c_str());
@@ -199,6 +209,27 @@ private:
     }
   }
 
+  void onTick()
+  {
+    if (!initialized_) {
+      initializeMarkerIfReady();
+      return;
+    }
+    if (!auto_follow_link_ || dragging_) {
+      return;
+    }
+    // Idle follow: snap marker to current controlled_link TF so the marker
+    // tracks every robot motion driven by other sources (joint slider, jog,
+    // scenario playback). publishGoal is NOT called here — only user drag
+    // produces a new goal_pose; follow updates are display-only.
+    geometry_msgs::msg::PoseStamped current;
+    if (!lookupPose(controlled_link_, current)) {
+      return;
+    }
+    server_->setPose(marker_name_, current.pose, current.header);
+    server_->applyChanges();
+  }
+
   void initializeMarkerIfReady()
   {
     if (initialized_) {
@@ -213,9 +244,11 @@ private:
     server_->applyChanges();
     publishGoal(initial_pose_.pose, initial_pose_.header.frame_id);
     initialized_ = true;
-    update_timer_->cancel();
 
-    RCLCPP_INFO(this->get_logger(), "EE Leader Marker initialized from link transform.");
+    RCLCPP_INFO(this->get_logger(),
+      "EE Leader Marker initialized from link transform. "
+      "auto_follow_link=%s @ %.1f Hz",
+      auto_follow_link_ ? "true" : "false", follow_rate_hz_);
   }
 
   bool lookupPose(const std::string & child_frame, geometry_msgs::msg::PoseStamped & pose_out)
@@ -260,6 +293,8 @@ private:
   double marker_color_r_;
   double marker_color_g_;
   double marker_color_b_;
+  bool auto_follow_link_;
+  double follow_rate_hz_;
 
   bool initialized_;
   bool dragging_;

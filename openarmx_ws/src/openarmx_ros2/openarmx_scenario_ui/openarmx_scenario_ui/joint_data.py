@@ -15,6 +15,26 @@ import os
 
 import yaml
 
+# --- UI scale factors (shared between joint_control_tab and other widgets) ----
+ARM_SCALE = 10        # slider int = degrees * 10
+GRIP_SCALE = 10000    # slider int = meters * 10000  (0.044 m -> 440)
+
+# --- Frame name constants -----------------------------------------------------
+# Bimanual base frame used by cyclo MoveL and TF lookups.
+CYCLO_BASE_FRAME = "openarmx_body_link0"
+
+
+def _poses_dir() -> str:
+    """Return the canonical directory for saved pose JSON files.
+
+    Respects the OPENARMX_SCENARIOS_DIR environment variable; falls back to
+    ~/openarmx_ws/scenarios/poses.
+    """
+    env = os.environ.get("OPENARMX_SCENARIOS_DIR")
+    base = env if env and os.path.isdir(env) else os.path.expanduser(
+        "~/openarmx_ws/scenarios")
+    return os.path.join(base, "poses")
+
 # --- Arm joints ---------------------------------------------------------------
 LEFT_ARM_JOINTS = [f"openarmx_left_joint{i}" for i in range(1, 8)]
 RIGHT_ARM_JOINTS = [f"openarmx_right_joint{i}" for i in range(1, 8)]

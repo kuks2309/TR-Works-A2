@@ -46,15 +46,17 @@ between perception and control.
 
 ## Build
 
-`cyclo_control` + `robotis_interfaces` build in an overlay workspace; `openarmx_pick`
-builds in `openarmx_ws`.
+`cyclo_control` builds in an overlay workspace; `openarmx_pick` and the
+`openarmx_scenario_player_msgs/MoveL` command msg build in `openarmx_ws`
+(the old `robotis_interfaces` msg is no longer used — the whole MoveL stack
+migrated to `openarmx_scenario_player_msgs`).
 
 > ⚠️ **Build `cyclo_control` single-threaded.** The Pinocchio-heavy C++ nodes use
 > ~2–3 GB RAM each; the default `-j8` overruns 15 GB → OOM → reboot. Use
 > `MAKEFLAGS=-j1` (≈21 min for `cyclo_motion_controller_ros`).
 
 ```bash
-# 1) solver overlay (cyclo_control symlinked + robotis_interfaces cloned)
+# 1) solver overlay (cyclo_control symlinked; MoveL msg now from openarmx_scenario_player_msgs in openarmx_ws)
 cd ~/TR-Works/kkw/China/cyclo_ws
 source /opt/ros/humble/setup.bash
 MAKEFLAGS=-j1 colcon build --symlink-install \
@@ -107,7 +109,7 @@ ros2 launch openarmx_pick openarmx_pick.launch.py auto_send:=true
 | `/box_plane/info` | `std_msgs/String` | in | JSON; `box_height_m` |
 | `/openarmx/grasp_pose` | `geometry_msgs/PoseStamped` | out | top-down grasp, `openarmx_body_link0` |
 | `/openarmx/grasp_markers` | `visualization_msgs/MarkerArray` | out | RViz approach arrow |
-| `/openarmx/movel` | `robotis_interfaces/MoveL` | out | only when `auto_send:=true` |
+| `/openarmx/left/movel` | `openarmx_scenario_player_msgs/MoveL` | out | only when `auto_send:=true` |
 
 Key `grasp_pose_node` params: `base_frame` (`openarmx_body_link0`),
 `pregrasp_height` (0.10 m), `grasp_depth` (0.005 m), `auto_send` (false),

@@ -264,6 +264,13 @@ def generate_launch_description():
             default_value="false",
             description="Enable gravity compensation feedforward (effort controllers + gravity_comp_node).",
         ),
+        DeclareLaunchArgument(
+            "start_rviz",
+            default_value="true",
+            description="Whether to spawn RViz with bimanual.rviz. Set to 'false' "
+                        "when an external launch (e.g. openarmx_scenario_player) "
+                        "owns the RViz instance.",
+        ),
     ]
 
     # Initialize launch configurations
@@ -297,16 +304,19 @@ def generate_launch_description():
          "bimanual.rviz"]
     )
 
-    # RViz node with dynamic namespace support
-    rviz_node_func = OpaqueFunction(
-        function=lambda context: [Node(
-            package="rviz2",
-            executable="rviz2",
-            name="rviz2",
-            namespace=namespace_from_context(context, arm_prefix),
-            output="log",
-            arguments=["-d", rviz_config_file],
-        )]
+    # RViz node with dynamic namespace support (skipped when start_rviz:=false)
+    rviz_node_func = GroupAction(
+        condition=IfCondition(LaunchConfiguration("start_rviz")),
+        actions=[OpaqueFunction(
+            function=lambda context: [Node(
+                package="rviz2",
+                executable="rviz2",
+                name="rviz2",
+                namespace=namespace_from_context(context, arm_prefix),
+                output="log",
+                arguments=["-d", rviz_config_file],
+            )]
+        )],
     )
 
     # Joint state broadcaster spawner

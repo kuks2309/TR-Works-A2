@@ -36,18 +36,25 @@ def _arm_node(side, pkg):
             "base_frame": "openarmx_body_link0",
             "controlled_link": f"openarmx_{side}_hand_tcp",
             "joint_states_topic": LaunchConfiguration("joint_states_topic"),
-            "joint_command_topic": f"/openarmx/{side}_arm/joint_trajectory",
+            # Publish to the ros2_control-standard JTC topic — controller
+            # spawner namespaces the topic by the controller's name in
+            # controllers.yaml (e.g. right_joint_trajectory_controller).
+            # The previous /openarmx/{side}_arm/joint_trajectory had no
+            # subscriber and silently dropped every trajectory.
+            "joint_command_topic": f"/{side}_joint_trajectory_controller/joint_trajectory",
             "control_frequency": LaunchConfiguration("control_frequency"),
-            # cyclo defaults (tuned conservative, same as single-arm launch)
+            # cyclo defaults — restored to upstream cyclo_control/config/omx_config.yaml values
             "time_step": 0.01,
-            "trajectory_time": 0.05,
-            "kp_position": 4.0,
-            "kp_orientation": 2.5,
+            "trajectory_time": 0.0,
+            "kp_position": 50.0,
+            "kp_orientation": 50.0,
             "weight_task_position": 10.0,
             "weight_task_orientation": 1.0,
-            "weight_damping": 0.05,
+            "weight_damping": 0.001,
             "slack_penalty": 1000.0,
             "cbf_alpha": 5.0,
+            "collision_buffer": 0.01,
+            "collision_safe_distance": 0.005,
             "joint_state_timeout": 0.5,
         }],
         remappings=[

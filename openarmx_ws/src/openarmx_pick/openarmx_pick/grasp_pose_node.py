@@ -36,7 +36,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 import tf2_ros
 
 try:
-    from robotis_interfaces.msg import MoveL
+    from openarmx_scenario_player_msgs.msg import MoveL
     _HAVE_MOVEL = True
 except Exception:  # MoveL only needed when auto_send=True
     _HAVE_MOVEL = False
@@ -104,7 +104,7 @@ class GraspPoseNode(Node):
         self.declare_parameter("cloud_topic", "/box_plane/cloud")
         self.declare_parameter("info_topic", "/box_plane/info")
         self.declare_parameter("base_frame", "openarmx_body_link0")
-        self.declare_parameter("movel_topic", "/openarmx/movel")
+        self.declare_parameter("movel_topic", "/openarmx/left/movel")
         self.declare_parameter("grasp_pose_topic", "/openarmx/grasp_pose")
         self.declare_parameter("pregrasp_height", 0.10)   # m above box top
         self.declare_parameter("grasp_depth", 0.005)      # m below top surface
@@ -147,7 +147,7 @@ class GraspPoseNode(Node):
         if self.auto_send and _HAVE_MOVEL:
             self.movel_pub = self.create_publisher(MoveL, gp("movel_topic").value, 10)
         elif self.auto_send:
-            self.get_logger().warn("auto_send set but robotis_interfaces/MoveL unavailable.")
+            self.get_logger().warn("auto_send set but openarmx_scenario_player_msgs/MoveL unavailable.")
 
         self.create_subscription(String, gp("info_topic").value, self._on_info, 10)
         self.create_subscription(PointCloud2, gp("cloud_topic").value, self._on_cloud, 5)

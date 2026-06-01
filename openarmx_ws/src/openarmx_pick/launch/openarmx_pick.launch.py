@@ -47,7 +47,7 @@ def generate_launch_description():
             "cloud_topic": LaunchConfiguration("cloud_topic"),
             "info_topic": "/box_plane/info",
             "base_frame": "openarmx_body_link0",
-            "movel_topic": "/openarmx/movel",
+            "movel_topic": "/openarmx/left/movel",
             "auto_send": LaunchConfiguration("auto_send"),
             "pregrasp_height": LaunchConfiguration("pregrasp_height"),
             "grasp_depth": 0.005,

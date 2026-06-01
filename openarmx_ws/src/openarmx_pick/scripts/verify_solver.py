@@ -16,7 +16,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory
-from robotis_interfaces.msg import MoveL
+from openarmx_scenario_player_msgs.msg import MoveL
 
 LEFT_JOINTS = [f"openarmx_left_joint{i}" for i in range(1, 8)]
 HOME = [0.0] * 7
@@ -27,7 +27,7 @@ class Verifier(Node):
         super().__init__("openarmx_solver_verifier")
         self.q = list(HOME)
         self.js_pub = self.create_publisher(JointState, "/joint_states", 10)
-        self.movel_pub = self.create_publisher(MoveL, "/openarmx/movel", 10)
+        self.movel_pub = self.create_publisher(MoveL, "/openarmx/left/movel", 10)
         self.create_subscription(
             JointTrajectory, "/openarmx/left_arm/joint_trajectory", self._on_cmd, 10)
         # Echo the latest command at the same rate joint_states is fed back, and
