@@ -7,6 +7,26 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-01 23:07 (KST) — yolov8 DetectBox per-goal prompts 라벨 오류 (stale class_names)
+
+### 증상
+on-demand `DetectBox` 액션 goal 에 `prompts`(예: 테이프류) 를 줘도 결과 `class_name` 이 엉뚱한 COCO 클래스(예: `motorcycle`)로 나옴. prompts 가 적용되지 않는 것처럼 보임. (롤 테이프를 화면에 두고 탐지 시 재현)
+
+### 원인
+prompts 는 실제로 적용되고 있었음 — box 프롬프트(conf 0.05)→0건, 서술형 "round object"(conf 0.01)→테이프 1건@0.15 로 **goal 마다 vocab 이 바뀌는 차등 동작** 확인(만약 항상 COCO 였다면 0.05 goal 에서도 0.15 테이프가 잡혔어야 함). 진짜 버그는 라벨 매핑:
+- `3d_detect_ws/.../yolov8_node.py:109` 가 `self._class_names = self._yolo.names` 를 **init 1회만** 캐시 (이때 prompts 없음 → 기본 COCO 80 클래스).
+- per-goal `set_classes(prompts)`(`:331`) 가 `self._yolo.names` 를 새 vocab 으로 갱신하지만 `self._class_names` 는 그대로.
+- 라벨 조회(`:230`) 가 stale `self._class_names`(COCO) 사용 → class_id 3 = 새 vocab "round object" 인데 COCO id 3 "motorcycle" 로 출력.
+- 부수: 동일 프롬프트라도 매 goal 마다 `set_classes` 재호출 → CLIP 재임베딩으로 매번 60-90s 소요.
+
+### 수정
+`3d_detect_ws/src/yolov8_detection/yolov8_detection/yolov8_node.py` `_execute` per-goal 분기 (~4줄): 프롬프트가 **바뀔 때만** `set_classes` 호출하도록 `prompts != self._prompts` 가드 + `self._prompts` 추적 + 호출 직후 `self._class_names = self._yolo.names` 갱신. 라벨 정확성 + 중복 재임베딩 방지 동시 해결.
+
+검증: symlink-install 이라 노드 재기동으로 반영. 동일 테이프 프롬프트(conf 0.01) 재탐지 → `class_id 3, class_name "round object"` (이전 "motorcycle") 로 **활성 vocab 정확 반영**, bbox_center (431,325) = 테이프 위치. `SUCCEEDED`.
+
+### 재발 방지
+`set_classes()` 로 vocab 변경 시 라벨 캐시(`self._class_names`) 도 반드시 동기 갱신한다. 고비용 vocab 재임베딩은 prompt 가 실제 변경될 때만 수행(매 goal 무조건 호출 금지).
+
 ## 2026-06-01 21:00 (KST) — cyclo 진동 근본 해결 + UI dedup refactor + MoveIt jog 지연 분석
 
 ### 증상

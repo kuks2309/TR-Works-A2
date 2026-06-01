@@ -324,11 +324,18 @@ class Yolov8Node(Node):
                 result.message = "canceled"
                 return result
 
-            # Per-goal prompt override (YOLO-World models only).
+            # Per-goal prompt override (YOLO-World models only). Re-embedding the
+            # vocabulary (set_classes) is expensive, so only do it when the prompt
+            # set actually changes from what is currently loaded.
             if goal.prompts and hasattr(self._yolo, "set_classes"):
                 prompts = [p.strip() for p in goal.prompts.split(",") if p.strip()]
-                if prompts:
+                if prompts and prompts != self._prompts:
                     self._yolo.set_classes(prompts)
+                    self._prompts = prompts
+                    # set_classes() rewrites self._yolo.names to the new vocab;
+                    # refresh the cached label map so detections report the prompt
+                    # text instead of the model's stale default (COCO) names.
+                    self._class_names = self._yolo.names
 
             conf_override = goal.confidence if goal.confidence > 0.0 else None
 
