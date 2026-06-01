@@ -7,7 +7,7 @@ Panels:
         - /Global Options1
         - /TF1
       Splitter Ratio: 0.5
-    Tree Height: 700
+    Tree Height: 708
   - Class: rviz_common/Views
     Expanded:
       - /Current View1
@@ -17,7 +17,7 @@ Visualization Manager:
   Class: ""
   Displays:
     - Alpha: 0.5
-      Cell Size: 0.1
+      Cell Size: 0.10000000149011612
       Class: rviz_default_plugins/Grid
       Color: 160; 160; 164
       Enabled: true
@@ -37,6 +37,7 @@ Visualization Manager:
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
       Collision Enabled: false
+      Description File: ""
       Description Source: Topic
       Description Topic:
         Depth: 5
@@ -51,6 +52,154 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
+        d435_center_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_body_link0:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_hand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_hand_tcp:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        openarmx_left_left_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link0:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link4_ext:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        openarmx_left_link5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link7:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_left_link7_pico:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        openarmx_left_right_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_hand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_hand_tcp:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        openarmx_right_left_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link0:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link4_ext:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        openarmx_right_link5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link7:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        openarmx_right_link7_pico:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        openarmx_right_right_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        world:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
       Mass Properties:
         Inertia: false
         Mass: false
@@ -64,14 +213,167 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-      Marker Scale: 0.2
+        charuco_board:
+          Value: true
+        d435_center_color_frame:
+          Value: true
+        d435_center_color_optical_frame:
+          Value: true
+        d435_center_depth_frame:
+          Value: true
+        d435_center_depth_optical_frame:
+          Value: true
+        d435_center_link:
+          Value: true
+        openarmx_body_link0:
+          Value: true
+        openarmx_left_hand:
+          Value: true
+        openarmx_left_hand_tcp:
+          Value: true
+        openarmx_left_left_finger:
+          Value: true
+        openarmx_left_link0:
+          Value: true
+        openarmx_left_link1:
+          Value: true
+        openarmx_left_link2:
+          Value: true
+        openarmx_left_link3:
+          Value: true
+        openarmx_left_link4:
+          Value: true
+        openarmx_left_link4_ext:
+          Value: true
+        openarmx_left_link5:
+          Value: true
+        openarmx_left_link6:
+          Value: true
+        openarmx_left_link7:
+          Value: true
+        openarmx_left_link7_pico:
+          Value: true
+        openarmx_left_right_finger:
+          Value: true
+        openarmx_right_hand:
+          Value: true
+        openarmx_right_hand_tcp:
+          Value: true
+        openarmx_right_left_finger:
+          Value: true
+        openarmx_right_link0:
+          Value: true
+        openarmx_right_link1:
+          Value: true
+        openarmx_right_link2:
+          Value: true
+        openarmx_right_link3:
+          Value: true
+        openarmx_right_link4:
+          Value: true
+        openarmx_right_link4_ext:
+          Value: true
+        openarmx_right_link5:
+          Value: true
+        openarmx_right_link6:
+          Value: true
+        openarmx_right_link7:
+          Value: true
+        openarmx_right_link7_pico:
+          Value: true
+        openarmx_right_right_finger:
+          Value: true
+        world:
+          Value: true
+      Marker Scale: 0.20000000298023224
       Name: TF
       Show Arrows: false
       Show Axes: true
       Show Names: true
       Tree:
-        {}
+        world:
+          openarmx_body_link0:
+            d435_center_link:
+              d435_center_color_frame:
+                d435_center_color_optical_frame:
+                  charuco_board:
+                    {}
+              d435_center_depth_frame:
+                d435_center_depth_optical_frame:
+                  {}
+            openarmx_left_link0:
+              openarmx_left_link1:
+                openarmx_left_link2:
+                  openarmx_left_link3:
+                    openarmx_left_link4:
+                      openarmx_left_link4_ext:
+                        {}
+                      openarmx_left_link5:
+                        openarmx_left_link6:
+                          openarmx_left_link7:
+                            openarmx_left_hand:
+                              openarmx_left_hand_tcp:
+                                {}
+                              openarmx_left_left_finger:
+                                {}
+                              openarmx_left_right_finger:
+                                {}
+                            openarmx_left_link7_pico:
+                              {}
+            openarmx_right_link0:
+              openarmx_right_link1:
+                openarmx_right_link2:
+                  openarmx_right_link3:
+                    openarmx_right_link4:
+                      openarmx_right_link4_ext:
+                        {}
+                      openarmx_right_link5:
+                        openarmx_right_link6:
+                          openarmx_right_link7:
+                            openarmx_right_hand:
+                              openarmx_right_hand_tcp:
+                                {}
+                              openarmx_right_left_finger:
+                                {}
+                              openarmx_right_right_finger:
+                                {}
+                            openarmx_right_link7_pico:
+                              {}
       Update Interval: 0
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: RGB8
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: PointCloud2
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.009999999776482582
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /d435_center/d435_center/depth/color/points
+      Use Fixed Frame: true
+      Use rainbow: true
       Value: true
   Enabled: true
   Global Options:
@@ -83,6 +385,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/FocusCamera
     - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
   Transformation:
     Current:
       Class: rviz_default_plugins/TF
@@ -90,34 +393,35 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.6
+      Distance: 1.600000023841858
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.25
-        Y: 0
-        Z: 0.35
+        X: 0.15676315128803253
+        Y: -0.12457091361284256
+        Z: 0.16312578320503235
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.42000001668930054
+      Pitch: -0.01500002108514309
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 5.4
+      Yaw: 5.075000286102295
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1000
+  Height: 1832
   Hide Left Dock: false
   Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd0000000100000000000003160000068cfc0200000002fb000000100044006900730070006c006100790073010000006e000003bc0000018200fffffffb0000000a005600690065007700730100000436000002c40000013200ffffff000008c50000068c00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Views:
     collapsed: false
-  Width: 1600
-  X: 64
-  Y: 64
+  Width: 3047
+  X: 488
+  Y: 135

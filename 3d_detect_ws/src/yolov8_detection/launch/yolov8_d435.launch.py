@@ -21,10 +21,11 @@ from launch_ros.substitutions import FindPackageShare
 
 
 # Calibrated openarmx_body_link0 -> d435 camera body TF
-# (from calibration/launch/calibration_bringup_with_camera_tf.launch.py)
+# (2026-06-01 ChArUco recalib, 60deg mount; same value baked into
+#  openarmx_description/urdf/robot/v10.urdf.xacro)
 _CAM_TF = dict(
-    x=0.034018, y=0.036608, z=0.644715,
-    roll_deg=-1.4041, pitch_deg=31.0059, yaw_deg=-2.1785,
+    x=0.065430, y=0.000987, z=0.641921,
+    roll_deg=0.6846, pitch_deg=59.7350, yaw_deg=0.4038,
 )
 
 

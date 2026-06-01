@@ -3,18 +3,23 @@
 OpenArmX bimanual 로봇의 중앙 RealSense **D435** 카메라 외부 파라미터(extrinsic)
 캘리브레이션과 RViz 시각화 절차를 정리한다.
 
-## 1. 캘리브레이션 결과 (2026-05-27)
+## 1. 캘리브레이션 결과 (2026-06-01, 60° 마운트)
 
 ChArUco 보드 기반 PnP(Perspective-n-Point, 원근 n점 자세추정) 평균으로 산출한
 정적 변환:
 
 ```
 openarmx_body_link0 → d435_center_link
-  translation (m)  : x=0.034018, y=0.036608, z=0.644715
-  rotation rpy(deg): roll=-1.4041, pitch=31.0059, yaw=-2.1785
+  translation (m)  : x=0.065430, y=0.000987, z=0.641921
+  rotation rpy(deg): roll=0.6846, pitch=59.7350, yaw=0.4038
 ```
 
-- PnP 30프레임 평균, 위치 표준편차 < 0.3 mm.
+- PnP 30프레임 평균, 위치 표준편차 < 0.1 mm. pitch 59.74° ≈ 마운트 60°.
+- 이력 (마운트 각도 변경마다 재캘리브, 보드 자세는 0.35/0/0.12·roll180 고정):
+  - 30° (2026-05-27): t=(0.034018, 0.036608, 0.644715), pitch=31.0059
+  - 45° (2026-06-01): t=(0.072753, 0.011982, 0.639814), pitch=44.5846
+  - 60° (2026-06-01): 위 현재값, pitch=59.7350
+  - ★ 틸트가 바뀌면 pitch 뿐 아니라 translation 도 이동 → 숫자 패치 불가, 재측정 필수.
 - `openarmx_body_link0 == base_link` (둘 다 world 원점). 이 프레임은 **bimanual urdf
   에만 존재**한다 (단일팔 v10 은 `openarmx_link0` 루트).
 
@@ -23,7 +28,7 @@ openarmx_body_link0 → d435_center_link
 | 항목 | 값 |
 |---|---|
 | 보드 | ChArUco 5×7, square 40 mm, marker 30 mm, `DICT_5X5_50` |
-| 보드 원점 (base_link 기준) | (x, y, z) = (+0.59, 0.00, 0.00) m |
+| 보드 원점 (base_link 기준) | (x, y, z) = (+0.35, 0.00, +0.12) m |
 | 보드 자세 | 수평, printed side 아래 → 캘리브 입력 `--roll 180` |
 
 보드 PDF/PNG: [`boards/charuco_5x7_40mm_30mm.pdf`](boards/charuco_5x7_40mm_30mm.pdf)
@@ -37,9 +42,9 @@ cd ~/TR-Works/kkw/China/openarmx_ws && source install/setup.bash
 # (1) 카메라 + 로봇 + ChArUco 라이브 검출 bringup (보드가 화면에 잘 잡히는지 확인)
 ros2 launch <repo>/calibration/launch/calibration_bringup.launch.py bimanual:=true
 
-# (2) extrinsic 산출 — 보드를 (+0.59, 0, 0)m 에 수평 배치한 상태에서
+# (2) extrinsic 산출 — 보드를 (+0.35, 0, +0.12)m 에 수평 배치한 상태에서
 python3 <repo>/calibration/scripts/solve_extrinsic.py \
-    --bx 0.59 --by 0.0 --bz 0.0 --roll 180 --yaw 0 \
+    --bx 0.35 --by 0.0 --bz 0.12 --roll 180 --yaw 0 \
     --samples 30 --parent base_link --child d435_center_link
 ```
 

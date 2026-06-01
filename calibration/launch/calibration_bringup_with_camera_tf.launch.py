@@ -8,7 +8,7 @@ description itself — see openarmx_description/urdf/robot/v10.urdf.xacro, guard
 by `bimanual` since the calibration parent frame openarmx_body_link0 only exists
 in the bimanual urdf. So robot_state_publisher publishes the calibrated transform
     openarmx_body_link0 -> d435_center_link
-    t=(0.034018, 0.036608, 0.644715) m   rpy=(-1.4041, 31.0059, -2.1785) deg
+    t=(0.065430, 0.000987, 0.641921) m   rpy=(0.6846, 59.7350, 0.4038) deg
 and renders the mesh; no separate static_transform_publisher is needed here.
 
 Because of that, this launch defaults to bimanual:=true — single-arm v10 has no

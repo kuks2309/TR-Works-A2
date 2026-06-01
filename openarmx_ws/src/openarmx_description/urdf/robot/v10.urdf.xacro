@@ -97,10 +97,11 @@
   <!-- Calibrated D435 center camera (visual-only).                  -->
   <!-- Parent frame openarmx_body_link0 only exists in bimanual, so  -->
   <!-- this block is guarded; single-arm v10 stays unchanged.        -->
-  <!-- Extrinsic (2026-05-27 ChArUco calibration, board @ +0.59m):   -->
+  <!-- Extrinsic (2026-06-01 ChArUco recalib, 60deg mount,           -->
+  <!-- board @ base_link (0.35, 0, 0.12) m, roll 180):               -->
   <!--   body_link0 -> d435_center_link                              -->
-  <!--   t=(0.034018, 0.036608, 0.644715) m                          -->
-  <!--   rpy=(-1.4041, 31.0059, -2.1785) deg                         -->
+  <!--   t=(0.065430, 0.000987, 0.641921) m                          -->
+  <!--   rpy=(0.6846, 59.7350, 0.4038) deg                           -->
   <!-- Mesh visual origin copied from realsense2_description.        -->
   <!-- No collision geometry: planning/control unaffected.           -->
   <!-- ============================================================= -->
@@ -108,8 +109,8 @@
     <joint name="d435_center_calib_joint" type="fixed">
       <parent link="openarmx_body_link0"/>
       <child link="d435_center_link"/>
-      <origin xyz="0.034018 0.036608 0.644715"
-              rpy="${radians(-1.4041)} ${radians(31.0059)} ${radians(-2.1785)}"/>
+      <origin xyz="0.065430 0.000987 0.641921"
+              rpy="${radians(0.6846)} ${radians(59.7350)} ${radians(0.4038)}"/>
     </joint>
     <link name="d435_center_link">
       <visual>
