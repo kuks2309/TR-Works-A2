@@ -38,3 +38,7 @@ China 모노레포 (openarmx_ws / cyclo_control / calibration / 3d_detect_ws 등
 ## 기존 이슈 검토 시점
 
 작업 시작 전, 동일 영역 / 모듈에서 기존 이슈가 있었는지 본 폴더를 빠르게 훑는다.
+
+## 별도 기록 파일
+
+- [2026-06-01 YOLOv8 연속 추론 → on-demand DetectBox action server 전환](2026-06-01_yolov8_on_demand_action_server.md)

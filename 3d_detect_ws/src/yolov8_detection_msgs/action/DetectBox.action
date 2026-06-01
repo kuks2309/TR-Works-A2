@@ -1,0 +1,19 @@
+# On-demand YOLOv8 detection. The server runs inference ONCE per goal on the
+# latest buffered camera frame, publishes to the usual ~/detections and
+# ~/image_annotated topics (so box_plane_node still reacts), and returns a
+# summary in the result.
+
+# ---- Goal (all optional overrides; empty string / <=0 keeps node defaults) ----
+string  prompts            # comma-separated YOLO-World prompts; "" -> keep current vocab
+float32 confidence         # <=0 -> node default confidence
+bool    publish_annotated  # publish ~/image_annotated for this call (RViz preview)
+---
+# ---- Result ----
+bool    success
+string  message
+int32   num_detections
+string  detections_json    # same payload published on ~/detections (use without subscribing)
+---
+# ---- Feedback ----
+string  phase              # 'grabbing_frame' | 'inferring' | 'publishing'
+float32 progress           # 0.0 .. 1.0

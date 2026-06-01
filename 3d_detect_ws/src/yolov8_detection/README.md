@@ -42,13 +42,29 @@ ros2 launch yolov8_detection yolov8_d435.launch.py \
 
 내부적으로 띄우는 노드:
 - `/camera/camera` — realsense2_camera D435 (컬러 + aligned depth + RGBD 포인트클라우드)
-- `/yolov8_node` — YOLOv8-World 오픈-보캐뷸러리 검출 (venv Python)
-- `/box_plane_node` — body-프레임 RANSAC 박스 윗면 + 바닥 평면
+- `/yolov8_node` — YOLOv8-World 오픈-보캐뷸러리 검출. **on-demand action server** (`~/detect`). 런치 직후에는 idle (모델만 메모리 상주, 추론 0). venv Python
+- `/box_plane_node` — body-프레임 RANSAC 박스 윗면 + 바닥 평면. `/yolov8_node/detections`가 올 때만 동작
 - `/robot_state_publisher` + `/joint_state_publisher` — openarmx URDF
 - `/openarmx_body_link0_to_camera_link_tf` — 캘리브된 정적 TF
 - `/rviz2` — Fixed Frame `openarmx_body_link0`, RobotModel + RGBD 클라우드 + 두 평면 마커
 
 `show_robot:=false`/`fit_box_plane:=false`로 부분 기능만 켤 수도 있습니다.
+
+### 3.1. 검출 요청 (on-demand)
+
+`yolov8_node`는 더 이상 매 프레임 추론하지 않는다(연속 자원 낭비 제거). 검출은 `DetectBox` 액션 goal이 올 때만 **1회** 수행되고, 기존 `~/detections`·`~/image_annotated` 토픽으로 1회 발행된다(→ `box_plane_node`/`grasp_pose_node`/RViz가 goal당 1회 갱신).
+
+```bash
+# 최신 프레임 1장으로 검출 1회 + 결과 받기
+ros2 action send_goal /yolov8_node/detect yolov8_detection_msgs/action/DetectBox \
+    "{publish_annotated: true}" --feedback
+
+# 프롬프트/신뢰도 일시 오버라이드 (빈 값/<=0 이면 노드 기본값)
+ros2 action send_goal /yolov8_node/detect yolov8_detection_msgs/action/DetectBox \
+    "{prompts: 'cardboard box,carton', confidence: 0.15, publish_annotated: true}"
+```
+
+Result 필드: `success`, `message`, `num_detections`, `detections_json`(`~/detections`와 동일 payload).
 
 ## 4. 자주 쓰는 launch 인자
 
