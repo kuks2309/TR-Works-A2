@@ -27,6 +27,16 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+# RViz config lives in the SRC tree, NOT install/share. Point RViz directly at
+# the source file (instead of FindPackageShare -> install/share/...) so that
+# "Save Config" (Ctrl+S) in RViz writes back to source and the layout survives
+# the next `colcon build` (symlink-install regenerates the install copy and
+# would otherwise wipe any saved RViz changes).
+_SRC_RVIZ_CONFIG = (
+    "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_ros2/"
+    "openarmx_scenario_player/config/openarmx_scenario.rviz"
+)
+
 
 def generate_launch_description():
     default_path = os.environ.get(
@@ -58,10 +68,9 @@ def generate_launch_description():
                          "Set false when reusing demo_sim's RViz.")),
         DeclareLaunchArgument(
             "rviz_config",
-            default_value=PathJoinSubstitution(
-                [player_pkg, "config", "openarmx_scenario.rviz"]),
-            description=("RViz config path -- defaults to the "
-                         "Cartesian-Control + EE-Leader-Marker layout."),
+            default_value=_SRC_RVIZ_CONFIG,
+            description=("RViz config path -- the SRC-tree openarmx_scenario.rviz "
+                         "so RViz 'Save Config' persists across colcon build."),
         ),
         DeclareLaunchArgument(
             "start_sim", default_value="true",
@@ -93,6 +102,21 @@ def generate_launch_description():
         output="log",
         arguments=["-d", LaunchConfiguration("rviz_config")],
         condition=IfCondition(LaunchConfiguration("spawn_workflow_rviz")),
+    )
+
+    # Bridge the URDF-baked camera link (d435_center_link, published by RSP from
+    # the calibrated extrinsic) to the live realsense2_camera frame tree
+    # (camera_link -> *_optical_frame). Identity, because d435_center_link IS the
+    # calibrated camera_link pose. Without this edge the external /camera/camera
+    # RGBD cloud can't resolve into openarmx_body_link0 and won't render in RViz.
+    camera_tf_bridge = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="d435_center_to_camera_link_tf",
+        arguments=["--x", "0", "--y", "0", "--z", "0",
+                   "--roll", "0", "--pitch", "0", "--yaw", "0",
+                   "--frame-id", "d435_center_link", "--child-frame-id", "camera_link"],
+        output="log",
     )
 
     scenario = Node(
@@ -148,5 +172,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        *args, cyclo_sim, scenario, ee_leader, movel_controllers, rviz,
+        *args, cyclo_sim, scenario, ee_leader, movel_controllers,
+        camera_tf_bridge, rviz,
     ])

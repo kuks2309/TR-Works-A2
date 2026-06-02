@@ -17,6 +17,14 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+# RViz config from the SRC tree (NOT install/share via FindPackageShare): RViz
+# "Save Config" (Ctrl+S) then writes back to source, so layout changes survive
+# the next `colcon build` instead of being overwritten by the regenerated copy.
+_SRC_RVIZ_CONFIG = (
+    "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_ros2/"
+    "openarmx_scenario_player/config/openarmx_scenario.rviz"
+)
+
 
 def generate_launch_description():
     ee_pkg = FindPackageShare("ee_leader_marker")
@@ -25,9 +33,8 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument(
             "rviz_config",
-            default_value=PathJoinSubstitution(
-                [player_pkg, "config", "openarmx_scenario.rviz"]),
-            description="RViz config — openarmx_scenario.rviz (Grid + RobotModel + 2 markers)",
+            default_value=_SRC_RVIZ_CONFIG,
+            description="RViz config — SRC-tree openarmx_scenario.rviz (save persists across colcon build)",
         ),
     ]
 
