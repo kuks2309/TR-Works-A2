@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>openarmx_pilz_box_align</name>
+  <version>0.1.0</version>
+  <description>
+    Bimanual box-align via MoveIt Pilz planning. On an AlignToBoxes action goal,
+    detect boxes (YOLOv8 DetectBox), assign each to the nearer arm by base-frame Y,
+    and move the assigned arm's link7 above its box at a commanded height/orientation
+    by planning a Pilz LIN motion (/plan_kinematic_path service) and publishing the
+    trajectory to the arm's JTC topic.
+  </description>
+  <maintainer email="drko0808@gmail.com">openarmx</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>shape_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>yolov8_detection_msgs</exec_depend>
+  <exec_depend>openarmx_pilz_box_align_msgs</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>openarmx_cyclo_box_align</name>
+  <version>0.1.0</version>
+  <description>
+    Bimanual box-align: on an AlignToBoxes action goal, detect boxes via the
+    on-demand YOLOv8 DetectBox action, assign each to the nearer arm by base-frame
+    Y, and move the assigned arm's link7 above its box at a commanded height and
+    hand orientation (default vertical-down) through the cyclo MoveL controllers.
+  </description>
+  <maintainer email="drko0808@gmail.com">openarmx</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>yolov8_detection_msgs</exec_depend>
+  <exec_depend>openarmx_scenario_player_msgs</exec_depend>
+  <exec_depend>openarmx_cyclo_box_align_msgs</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

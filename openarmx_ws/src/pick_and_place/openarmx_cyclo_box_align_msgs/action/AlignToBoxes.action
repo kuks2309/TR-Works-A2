@@ -1,0 +1,21 @@
+# Detect boxes, assign each to the nearer arm by base-frame Y (+Y -> left arm,
+# -Y -> right arm), and move the assigned arm's link7 above its box at height z
+# with the given hand orientation (default = vertical-down, R180 P0 Y0).
+# ---- Goal ----
+float64 z                 # link7 target height (absolute, openarmx_body_link0), metres
+float64 roll_deg  180.0   # hand orientation roll  (default: vertical-down)
+float64 pitch_deg 0.0     # hand orientation pitch
+float64 yaw_deg   0.0     # hand orientation yaw
+string  arms      both    # "both" | "left" | "right"
+float64 confidence 0.0    # YOLO confidence (<=0 -> node default)
+string  prompts    ""     # YOLO-World prompts (empty -> node default box vocab)
+---
+# ---- Result ----
+bool   success
+string message
+string detections_json    # boxes detected, in base frame
+string assignments_json    # arm -> box, target pose, final position error
+---
+# ---- Feedback ----
+string  phase             # 'detecting' | 'assigning' | 'moving' | 'done'
+float32 progress          # 0.0 .. 1.0
