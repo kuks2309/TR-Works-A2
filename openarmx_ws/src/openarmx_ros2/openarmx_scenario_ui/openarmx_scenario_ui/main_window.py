@@ -21,6 +21,7 @@ from openarmx_scenario_ui.joint_control_tab import JointControlTab
 from openarmx_scenario_ui.launch_manager_tab import LaunchManagerTab
 from openarmx_scenario_ui.managed_process import ManagedProcess
 from openarmx_scenario_ui.scenario_action_client import ScenarioRosBridge
+from openarmx_scenario_ui.teaching_tab import TeachingTab
 
 
 HW_LAUNCH_CMD = [
@@ -33,32 +34,6 @@ HW_LAUNCH_CMD = [
     "can_fd:=false",
 ]
 PLAYER_RUN_CMD = ["ros2", "run", "openarmx_scenario_player", "scenario_player_node.py"]
-
-
-def _resolve_kill_all_script() -> str:
-    """Locate the canonical kill_all_ros2.sh.
-
-    Order: $KILL_ALL_ROS2 → ~/kill_all_ros2.sh (documented install spot) →
-    a `scripts/kill_all_ros2.sh` found by walking up from this file (covers
-    both the source tree and the install space, e.g. <ws>/scripts/). Falls
-    back to ~/kill_all_ros2.sh even if absent so the path is still reported.
-    """
-    env = os.environ.get("KILL_ALL_ROS2")
-    if env and os.path.isfile(env):
-        return env
-    home = os.path.expanduser("~/kill_all_ros2.sh")
-    if os.path.isfile(home):
-        return home
-    here = os.path.abspath(__file__)
-    for _ in range(12):
-        here = os.path.dirname(here)
-        cand = os.path.join(here, "scripts", "kill_all_ros2.sh")
-        if os.path.isfile(cand):
-            return cand
-    return home
-
-
-KILL_ALL_SCRIPT = _resolve_kill_all_script()
 
 
 def _scenario_workflow_cmd() -> list:
@@ -146,10 +121,17 @@ class ScenarioMainWindow(QMainWindow):
         self._tabs.addTab(self._joint_tab, "Joint Control")
         self._cart_tab = CartesianControlTab(self._bridge, parent=self)
         self._tabs.addTab(self._cart_tab, "Cartesian Control")
+        self._teaching_tab = TeachingTab(self._bridge, parent=self)
+        self._tabs.addTab(self._teaching_tab, "Teaching")
         self._launch_tab = LaunchManagerTab(parent=self)
         self._tabs.addTab(self._launch_tab, "Launch Manager")
-        self._diag_tab = DiagnosticsTab(self._bridge, parent=self)
-        self._tabs.addTab(self._diag_tab, "Diagnostics")
+        # Diagnostics split into two focused tabs (same DiagnosticsTab widget,
+        # filtered): Node Health = node alive/down + raw node list;
+        # Pipe Health = topic publish rate / latched / descriptions.
+        self._node_health_tab = DiagnosticsTab(self._bridge, parent=self, show="node")
+        self._tabs.addTab(self._node_health_tab, "Node Health")
+        self._pipe_health_tab = DiagnosticsTab(self._bridge, parent=self, show="topic")
+        self._tabs.addTab(self._pipe_health_tab, "Pipe Health")
         self.setCentralWidget(self._tabs)
         # Minimum size pinned to the user's current working window size so the
         # UI cannot be shrunk below the point where tab headers / combos start
@@ -168,7 +150,6 @@ class ScenarioMainWindow(QMainWindow):
         self.btnHwStop.clicked.connect(self._stop_hw)
         self.btnPlayerStart.clicked.connect(self._start_player)
         self.btnPlayerStop.clicked.connect(self._stop_player)
-        self.btnStopAll.clicked.connect(self._stop_all)
         self.btnBrowsePath.clicked.connect(self._browse_scenario_path)
         self.btnRefresh.clicked.connect(self._refresh_scenarios)
         self.cmbScenario.currentIndexChanged.connect(self._on_scenario_changed)
@@ -269,26 +250,6 @@ class ScenarioMainWindow(QMainWindow):
     def _stop_player(self) -> None:
         self._player.stop()
         self._log("Scenario player stopped.")
-        self._refresh_proc_status()
-
-    def _stop_all(self) -> None:
-        ans = QMessageBox.question(
-            self, "Stop All",
-            f"Run {KILL_ALL_SCRIPT} to terminate ALL ROS2 processes "
-            "(incl. RViz, joint_control_ui, etc.)?",
-        )
-        if ans != QMessageBox.Yes:
-            return
-        try:
-            subprocess.run(
-                [KILL_ALL_SCRIPT], timeout=15.0, check=False,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-        except Exception as e:
-            self._log(f"{os.path.basename(KILL_ALL_SCRIPT)} failed: {e}")
-        self._hw.stop()
-        self._player.stop()
-        self._log("STOP ALL executed.")
         self._refresh_proc_status()
 
     def _refresh_proc_status(self) -> None:
@@ -444,7 +405,9 @@ class ScenarioMainWindow(QMainWindow):
         self._status_timer.stop()
         self._joint_tab.shutdown()
         self._cart_tab.shutdown()
-        self._diag_tab.shutdown()
+        self._teaching_tab.shutdown()
+        self._node_health_tab.shutdown()
+        self._pipe_health_tab.shutdown()
         self._launch_tab.shutdown()
         self._hw.stop()
         self._player.stop()

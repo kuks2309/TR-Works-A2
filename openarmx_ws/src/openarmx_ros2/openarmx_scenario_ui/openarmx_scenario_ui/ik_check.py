@@ -45,6 +45,12 @@ def _dict_to_se3(pose: dict) -> pin.SE3:
         q = pin.Quaternion(qw, qx, qy, qz)
     q.normalize()
     t = np.array([pose["x"], pose["y"], pose["z"]])
+    # NOTE: on this machine pinocchio 3.9.0 <-> numpy have an ABI mismatch, so
+    # EVERY numpy<->Eigen conversion (SE3(R,t), SE3(q,t), even .translation
+    # setters) raises Boost.Python.ArgumentError. The whole IK pre-check is
+    # therefore non-functional here; _on_jog_press wraps the call in try/except
+    # so the cyclo jog still publishes. Rebuild pinocchio against this numpy to
+    # restore the pre-check.
     return pin.SE3(q.toRotationMatrix(), t)
 
 

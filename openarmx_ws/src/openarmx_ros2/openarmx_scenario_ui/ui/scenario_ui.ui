@@ -26,13 +26,6 @@
        <item row="1" column="1"><widget class="QPushButton" name="btnPlayerStart"><property name="text"><string>Start</string></property></widget></item>
        <item row="1" column="2"><widget class="QPushButton" name="btnPlayerStop"><property name="text"><string>Stop</string></property><property name="styleSheet"><string>color:#c00;</string></property></widget></item>
        <item row="1" column="3"><widget class="QLabel" name="lblPlayerStatus"><property name="text"><string>● Stopped</string></property><property name="styleSheet"><string>color:gray;</string></property></widget></item>
-
-       <item row="2" column="0" colspan="4">
-        <widget class="QPushButton" name="btnStopAll">
-         <property name="text"><string>STOP ALL  (kill_all_ros2.sh)</string></property>
-         <property name="styleSheet"><string>background-color:#fee; color:#c00; font-weight:bold; padding:6px;</string></property>
-        </widget>
-       </item>
       </layout>
      </widget>
     </item>

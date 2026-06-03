@@ -186,16 +186,23 @@ class JointControlTab(QWidget):
 
     def _build_controls(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.btn_home = QPushButton("Home")
-        self.btn_home.setStyleSheet(
-            "QPushButton { background-color:#2196F3; color:white; font-weight:bold; }")
-        self.btn_init = QPushButton("Init")
-        self.btn_init.setStyleSheet(
-            "QPushButton { background-color:#FF9800; color:white; font-weight:bold; }")
-        self.btn_send = QPushButton("Send")
-        self.btn_save = QPushButton("Save Pose")
-        self.btn_save.setStyleSheet(
-            "QPushButton { background-color:#4CAF50; color:white; font-weight:bold; }")
+        def _btn(text, bg, hover, pressed):
+            b = QPushButton(text)
+            b.setMinimumWidth(96)
+            b.setMinimumHeight(34)
+            b.setStyleSheet(
+                f"QPushButton {{ background-color:{bg}; color:white; font-weight:bold; "
+                f"border:none; border-radius:4px; padding:6px 14px; }}"
+                f"QPushButton:hover {{ background-color:{hover}; }}"
+                f"QPushButton:pressed {{ background-color:{pressed}; }}")
+            return b
+
+        # All four buttons same size; semantic colors (blue=home, orange=init,
+        # green=execute/send, blue-grey=save/record).
+        self.btn_home = _btn("Home", "#2196F3", "#1976D2", "#1565C0")
+        self.btn_init = _btn("Init", "#FF9800", "#FB8C00", "#EF6C00")
+        self.btn_send = _btn("Send", "#4CAF50", "#43A047", "#2E7D32")
+        self.btn_save = _btn("Save Pose", "#607D8B", "#546E7A", "#455A64")
         self.chk_auto = QCheckBox("Auto publish")
         self.chk_auto.setChecked(True)
         self.chk_mirror = QCheckBox("Mirror L→R")
@@ -419,8 +426,14 @@ class JointControlTab(QWidget):
             self._set_status("Published /joint_states (SIL)")
 
     def _on_sil_tick(self) -> None:
-        # Skip if a trajectory controller is active (broadcaster owns /joint_states).
+        # When a trajectory controller is active the joint_state_broadcaster owns
+        # /joint_states, so SIL must NOT publish (dual-publish). Also DROP the
+        # stale self-echo filter: it was armed by our last SIL publish before the
+        # controllers came up, and if the broadcaster's real feedback happens to
+        # match those values (e.g. at the home/zero pose) it would be silently
+        # dropped — freezing the joint readout and breaking Teaching Capture.
         if self._bridge.traj_subscriber_count() > 0:
+            self._bridge.clear_self_echo()
             return
         arm = {n: self._clamp(n, v) for n, v in self._get_arm_deg().items()}
         self._bridge.publish_joint_states(arm, self._get_gripper_m())

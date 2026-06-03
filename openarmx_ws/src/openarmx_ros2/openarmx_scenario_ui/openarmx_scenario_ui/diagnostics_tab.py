@@ -11,7 +11,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from openarmx_scenario_ui import diagnostics_spec as ds
@@ -26,17 +26,20 @@ _COLORS = {
 
 
 class DiagnosticsTab(QWidget):
-    def __init__(self, bridge, parent=None) -> None:
+    def __init__(self, bridge, parent=None, show="both") -> None:
         super().__init__(parent)
         self._bridge = bridge
+        self._show = show          # "both" | "node" (Node Health) | "topic" (Pipe Health)
         # Static row spec: (kind, category, link, detail, extra)
         #   node:  extra = optional(bool)
         #   topic: extra = (qos_kind, kind)
         self._spec = []
-        for cat, name, detail in ds.NODE_SPECS:
-            self._spec.append(("node", cat, name, detail, name in ds.OPTIONAL_NODES))
-        for cat, topic, _mt, _q, kind, detail in ds.TOPIC_SPECS:
-            self._spec.append(("topic", cat, topic, detail, kind))
+        if show in ("both", "node"):
+            for cat, name, detail in ds.NODE_SPECS:
+                self._spec.append(("node", cat, name, detail, name in ds.OPTIONAL_NODES))
+        if show in ("both", "topic"):
+            for cat, topic, _mt, _q, kind, detail in ds.TOPIC_SPECS:
+                self._spec.append(("topic", cat, topic, detail, kind))
 
         self._build_ui()
         self._timer = QTimer(self)
@@ -75,7 +78,19 @@ class DiagnosticsTab(QWidget):
             self._table.setItem(row, 2, QTableWidgetItem(link))
             self._table.setItem(row, 3, QTableWidgetItem(""))
             self._table.setItem(row, 4, QTableWidgetItem(detail))
-        root.addWidget(self._table)
+        # Spec table gets equal vertical weight with the raw node list below
+        # (Node Health = 50/50 top/bottom). For Pipe Health it simply fills.
+        root.addWidget(self._table, stretch=1)
+
+        # Node Health also shows the raw `ros2 node list` (moved here from the
+        # Launch Manager tab) so ALL live nodes are visible, not just spec'd ones.
+        self._node_view = None
+        if self._show == "node":
+            root.addWidget(QLabel("All ROS2 nodes:"))
+            self._node_view = QTextEdit()
+            self._node_view.setReadOnly(True)
+            self._node_view.setMinimumHeight(120)
+            root.addWidget(self._node_view, stretch=1)   # 50/50 with the table above
 
         bottom = QHBoxLayout()
         self._lbl_footer = QLabel("")
@@ -90,7 +105,13 @@ class DiagnosticsTab(QWidget):
 
     def _refresh(self) -> None:
         live = self._bridge.live_node_names()
-        rates = self._bridge.diag_consume_rates()
+        # diag_consume_rates() RESETS the shared per-topic message counters on
+        # read, so it must have exactly ONE consumer. Node Health (show="node")
+        # does not display rates — if it also consumed, it would zero the counts
+        # between Pipe Health's reads and every streaming topic (e.g. /joint_states,
+        # /tf) would show a false 0.0 Hz. Only the topic-showing tab consumes.
+        rates = (self._bridge.diag_consume_rates()
+                 if self._show in ("both", "topic") else {})
         counts = {"ok": 0, "warn": 0, "down": 0, "idle": 0}
         nodes_alive = nodes_total = 0
 
@@ -144,6 +165,10 @@ class DiagnosticsTab(QWidget):
             f"✓ {counts['ok']} ok   ○ {counts['idle']} idle")
         self._lbl_footer.setText(
             f"Nodes: {nodes_alive}/{nodes_total}   Links: {len(rates)}")
+
+        if self._node_view is not None:
+            fq = sorted(n for n in self._bridge.live_node_names() if n.startswith("/"))
+            self._node_view.setPlainText("\n".join(fq) if fq else "(no nodes)")
 
     def shutdown(self) -> None:
         self._timer.stop()

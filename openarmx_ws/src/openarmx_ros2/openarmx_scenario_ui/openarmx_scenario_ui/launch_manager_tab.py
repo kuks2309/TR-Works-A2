@@ -25,61 +25,153 @@ from PyQt5.QtWidgets import (
 
 from openarmx_scenario_ui.managed_process import ManagedProcess
 
+# Scenario RViz config — resolve the SRC path via realpath so the symlink-
+# installed module still points at the checked-in .rviz (project rule:
+# RViz config loaded from src, not install/share).
+_OPENARMX_ROS2 = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.realpath(__file__))))
+_SCENARIO_RVIZ = os.path.join(
+    _OPENARMX_ROS2, "openarmx_scenario_player", "config", "openarmx_scenario.rviz")
 
-# Each preset: key, label, cmd (argv list), confirm (warn before start),
-# nodes (ros2 node names that indicate it is running),
-# procs (pgrep -f patterns that indicate it is running).
-# Core targets for the scenario workflow only.
+# Start = green (go), Stop = red. Larger + colored with hover/pressed states.
+_BTN_START_QSS = (
+    "QPushButton { background-color:#43A047; color:white; font-weight:bold; "
+    "border:none; border-radius:4px; padding:6px 16px; }"
+    "QPushButton:hover { background-color:#388E3C; }"
+    "QPushButton:pressed { background-color:#2E7D32; }"
+)
+_BTN_STOP_QSS = (
+    "QPushButton { background-color:#E53935; color:white; font-weight:bold; "
+    "border:none; border-radius:4px; padding:6px 16px; }"
+    "QPushButton:hover { background-color:#C62828; }"
+    "QPushButton:pressed { background-color:#B71C1C; }"
+)
+_BTN_W = 90      # button min width
+_BTN_H = 34      # button min height
+
+
+# Each preset: key, group (section header), label, cmd (argv list),
+# confirm (warn before start), nodes (ros2 node names = running),
+# procs (pgrep -f patterns = running), sweep (extra kill patterns on stop).
+# Grouped by role so the purpose of each target is obvious.
 PRESETS = [
+    # ---- L0 하드웨어 (Hardware only) — controller_manager + 인터페이스 + RSP,
+    #      컨트롤러는 스폰 안 함. 새 자기완결 launch(fork 미수정). 택1. ----
     {
-        "key": "sil_bringup",
-        "label": "SIL Bringup (fake HW + ctrl)",
-        "cmd": ["ros2", "launch", "openarmx_bringup", "openarmx.bimanual.launch.py",
-                "use_fake_hardware:=true",
-                "robot_controller:=joint_trajectory_controller",
-                "start_rviz:=false"],
+        "key": "sil_hw",
+        "group": "L0 · 하드웨어 (Hardware) — 택1",
+        "label": "SIL 하드웨어 — 시뮬 (fake HW, 컨트롤러 X)",
+        "cmd": ["ros2", "launch", "openarmx_scenario_player",
+                "openarmx_hardware.launch.py", "use_fake_hardware:=true"],
         "confirm": False,
         "nodes": [],
-        # specific arg distinguishes SIL from HW (both share openarmx.bimanual.launch)
         "procs": ["use_fake_hardware:=true"],
-        # child node executables to also reap on stop (orphan-proof cleanup)
-        "sweep": ["robot_state_publisher", "ros2_control_node", "rviz2"],
+        "sweep": ["openarmx_hardware.launch", "ros2_control_node"],
     },
     {
-        "key": "hw_bringup",
-        "label": "HW Bringup (real robot)",
-        "cmd": ["ros2", "launch", "openarmx_bringup", "openarmx.bimanual.launch.py",
-                "use_fake_hardware:=false",
-                "robot_controller:=joint_trajectory_controller",
+        "key": "hw_hw",
+        "group": "L0 · 하드웨어 (Hardware) — 택1",
+        "label": "HW 하드웨어 — 실로봇 (CAN 모터, 컨트롤러 X)",
+        "cmd": ["ros2", "launch", "openarmx_scenario_player",
+                "openarmx_hardware.launch.py", "use_fake_hardware:=false",
                 "control_mode:=mit",
                 "right_can_interface:=can0", "left_can_interface:=can1",
-                "can_fd:=false",
-                "start_rviz:=false"],
+                "can_fd:=false"],
         "confirm": True,
         "nodes": [],
         "procs": ["use_fake_hardware:=false"],
-        "sweep": ["robot_state_publisher", "ros2_control_node", "rviz2"],
+        "sweep": ["openarmx_hardware.launch", "ros2_control_node"],
     },
+    # ---- L1 컨트롤러 (Controllers) — 실행 중 controller_manager에 스폰 ----
     {
-        "key": "moveit_demo",
-        "label": "MoveIt Demo (move_group + RViz)",
-        "cmd": ["ros2", "launch", "openarmx_bimanual_moveit_config", "demo.launch.py"],
+        "key": "controllers",
+        "group": "L1 · 컨트롤러 (Controllers) — L0 필요",
+        "label": "컨트롤러 스폰 — joint_state_broadcaster + 좌우 관절궤적 컨트롤러 + 그리퍼",
+        "cmd": ["ros2", "run", "controller_manager", "spawner",
+                "joint_state_broadcaster",
+                "left_joint_trajectory_controller",
+                "right_joint_trajectory_controller",
+                "left_gripper_controller", "right_gripper_controller",
+                "-c", "/controller_manager", "--unload-on-kill"],
+        "confirm": False,
+        "nodes": ["/left_joint_trajectory_controller",
+                  "/right_joint_trajectory_controller"],
+        "procs": ["controller_manager spawner"],
+    },
+    # ---- L2 모션 / 플래너 (Motion) — L1 필요 ----
+    {
+        "key": "move_group",
+        "group": "L2 · 모션 / 플래너 (Motion) — L1 필요",
+        "label": "MoveIt move_group — Pilz LIN/PTP plan&execute",
+        # move_group ONLY (no controllers/RViz) → composes on top of a bringup
+        # without the controller_manager conflict that demo.launch.py caused.
+        "cmd": ["ros2", "launch", "openarmx_bimanual_moveit_config",
+                "move_group.launch.py"],
         "confirm": False,
         "nodes": ["/move_group"],
-        "procs": ["demo.launch"],
+        "procs": ["move_group.launch"],
     },
     {
-        "key": "scenario_player",
-        "label": "Scenario Player node (backend only)",
-        "cmd": ["ros2", "run", "openarmx_scenario_player", "scenario_player_node.py"],
+        "key": "cyclo_movel",
+        "group": "L2 · 모션 / 플래너 (Motion) — L1 필요",
+        "label": "cyclo MoveL 컨트롤러 — QP+CBF 직접제어",
+        "cmd": ["ros2", "launch", "openarmx_pick",
+                "openarmx_movel_bimanual.launch.py"],
         "confirm": False,
-        "nodes": [],
+        "nodes": ["/openarmx_left_movel_controller",
+                  "/openarmx_right_movel_controller"],
+        "procs": ["openarmx_movel_bimanual"],
+    },
+    # ---- 티칭 / 시각화 (Teaching / View) ----
+    {
+        "key": "ee_markers",
+        "group": "L3 · 티칭 / 시각화 (Teaching / View) — L0 필요",
+        "label": "EE Leader 마커 — RViz 6-DoF 드래그 티칭",
+        # The ee_leader_marker launch defaults (base_link / left_end_effector /
+        # right_end_effector) are robot-agnostic placeholders that DON'T exist in
+        # the openarmx TF tree, so the node's base_frame→controlled_link TF lookup
+        # fails forever and the interactive marker is never inserted (RViz shows
+        # the display but no marker). Pass the openarmx-specific frames + goal
+        # topics — identical to scenario_player_with_ee_leader.launch.py (SSOT).
+        "cmd": ["ros2", "launch", "ee_leader_marker",
+                "ee_leader_marker_bimanual.launch.py",
+                "base_frame:=openarmx_body_link0",
+                "left_controlled_link:=openarmx_left_link7",
+                "right_controlled_link:=openarmx_right_link7",
+                "left_goal_topic:=/openarmx/left/ee_leader/goal_pose",
+                "right_goal_topic:=/openarmx/right/ee_leader/goal_pose",
+                "start_rviz:=false"],
+        "confirm": False,
+        "nodes": ["/ee_leader_left_marker", "/ee_leader_right_marker"],
+        "procs": ["ee_leader_marker_bimanual"],
+    },
+    {
+        "key": "scenario_rviz",
+        "group": "L3 · 티칭 / 시각화 (Teaching / View) — L0 필요",
+        "label": "Scenario RViz — 마커/박스 디스플레이",
+        # Rename the node to /openarmx_scenario_rviz so the "nodes" health check
+        # below, the Node Health tab, and kill_all_ros2.sh (which maps node names
+        # to PIDs via the __node:= remap) all see a consistent name. A bare
+        # `rviz2` spawns the node as /rviz, which would never match.
+        "cmd": ["rviz2", "-d", _SCENARIO_RVIZ,
+                "--ros-args", "-r", "__node:=openarmx_scenario_rviz"],
+        "confirm": False,
+        "nodes": ["/openarmx_scenario_rviz"],
+        "procs": ["openarmx_scenario.rviz"],
+        "sweep": ["openarmx_scenario.rviz"],
+    },
+    # ---- 시나리오 (Scenario) ----
+    {
+        "key": "scenario_player",
+        "group": "L4 · 시나리오 (Scenario) — L2 필요",
+        "label": "Scenario Player 노드 (재생 백엔드)",
+        "cmd": ["ros2", "run", "openarmx_scenario_player",
+                "scenario_player_node.py"],
+        "confirm": False,
+        "nodes": ["/scenario_player"],
         "procs": ["scenario_player_node"],
     },
 ]
-# NOTE: trimmed to the 4 core scenario-workflow targets. Other launches/nodes
-# (Display/RViz, MoveIt variants, Preview Bringup, teach/teleop/gravity/lerobot)
-# can be run ad-hoc via the Custom command row.
 
 CUSTOM_KEY = "custom"
 
@@ -109,32 +201,57 @@ class LaunchManagerTab(QWidget):
 
         grp = QGroupBox("Launch / Node Manager")
         grid = QGridLayout(grp)
-        grid.addWidget(QLabel("<b>Target</b>"), 0, 0)
-        grid.addWidget(QLabel("<b>Start</b>"), 0, 1)
-        grid.addWidget(QLabel("<b>Stop</b>"), 0, 2)
-        grid.addWidget(QLabel("<b>Status</b>"), 0, 3)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        # Row layout: Target (50%) | [Start][Stop] (25%) | Status (25%)
+        grid.setColumnStretch(0, 2)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
 
-        for row, preset in enumerate(PRESETS, start=1):
+        grid.addWidget(QLabel("<b>Target</b>"), 0, 0)
+        grid.addWidget(QLabel("<b>Start / Stop</b>"), 0, 1)
+        grid.addWidget(QLabel("<b>Status</b>"), 0, 2)
+
+        row = 1
+        last_group = None
+        for preset in PRESETS:
+            g = preset.get("group", "")
+            if g != last_group:
+                hdr = QLabel(f"<b>{g}</b>")
+                hdr.setStyleSheet("color:#1565c0; padding-top:8px;")
+                grid.addWidget(hdr, row, 0, 1, 3)
+                last_group = g
+                row += 1
             key = preset["key"]
-            grid.addWidget(QLabel(preset["label"]), row, 0)
+            name = QLabel(preset["label"])
+            name.setStyleSheet("padding-left:10px;")
+            grid.addWidget(name, row, 0)
+            # Start + Stop grouped together in the single 25% buttons cell.
+            btn_cell = QWidget()
+            bh = QHBoxLayout(btn_cell)
+            bh.setContentsMargins(0, 0, 0, 0)
+            bh.setSpacing(6)
             start = QPushButton("Start")
+            start.setMinimumWidth(_BTN_W)
+            start.setMinimumHeight(_BTN_H)
+            start.setStyleSheet(_BTN_START_QSS)
             stop = QPushButton("Stop")
-            stop.setStyleSheet("color:#c00;")
-            status = QLabel("● Stopped")
-            status.setStyleSheet("color:gray;")
+            stop.setMinimumWidth(_BTN_W)
+            stop.setMinimumHeight(_BTN_H)
+            stop.setStyleSheet(_BTN_STOP_QSS)
             start.clicked.connect(lambda _c, k=key: self._start(k))
             stop.clicked.connect(lambda _c, k=key: self._stop(k))
-            grid.addWidget(start, row, 1)
-            grid.addWidget(stop, row, 2)
-            grid.addWidget(status, row, 3)
+            bh.addWidget(start)
+            bh.addWidget(stop)
+            bh.addStretch()
+            grid.addWidget(btn_cell, row, 1)
+            status = QLabel("● Stopped")
+            status.setStyleSheet("color:gray;")
+            grid.addWidget(status, row, 2)
             self._rows[key] = (start, stop, status)
-        grid.setColumnStretch(0, 1)
+            row += 1
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(grp)
-        scroll.setMinimumHeight(320)
-        root.addWidget(scroll, stretch=1)
+        root.addWidget(grp)
 
         # Custom command row
         cgrp = QGroupBox("Custom command")
@@ -143,10 +260,16 @@ class LaunchManagerTab(QWidget):
         self._custom_edit.setPlaceholderText(
             "ros2 launch <pkg> <file>.launch.py  /  ros2 run <pkg> <exe>")
         cstart = QPushButton("Start")
+        cstart.setMinimumWidth(_BTN_W)
+        cstart.setMinimumHeight(_BTN_H)
+        cstart.setStyleSheet(_BTN_START_QSS)
         cstop = QPushButton("Stop")
-        cstop.setStyleSheet("color:#c00;")
+        cstop.setMinimumWidth(_BTN_W)
+        cstop.setMinimumHeight(_BTN_H)
+        cstop.setStyleSheet(_BTN_STOP_QSS)
         self._custom_status = QLabel("● Stopped")
         self._custom_status.setStyleSheet("color:gray;")
+        self._custom_status.setFixedWidth(210)
         cstart.clicked.connect(self._start_custom)
         cstop.clicked.connect(lambda: self._stop(CUSTOM_KEY))
         crow.addWidget(self._custom_edit)
@@ -160,18 +283,15 @@ class LaunchManagerTab(QWidget):
         self.btn_stop_all = QPushButton("Stop All (this tab)")
         self.btn_stop_all.setStyleSheet("color:#c00; font-weight:bold;")
         self.btn_stop_all.clicked.connect(self._stop_all)
-        self.btn_refresh = QPushButton("Refresh node list")
+        self.btn_refresh = QPushButton("Refresh status")
         self.btn_refresh.clicked.connect(self._refresh)
         ctl.addWidget(self.btn_stop_all)
         ctl.addWidget(self.btn_refresh)
         ctl.addStretch()
         root.addLayout(ctl)
 
-        root.addWidget(QLabel("Active ROS2 nodes (ros2 node list):"))
-        self._node_view = QTextEdit()
-        self._node_view.setReadOnly(True)
-        self._node_view.setMaximumHeight(160)
-        root.addWidget(self._node_view)
+        # (Active ROS2 node list moved to the Node Health tab.)
+        root.addStretch(1)
 
         self._lbl_status = QLabel("Ready")
         self._lbl_status.setStyleSheet("color:#444; padding:2px;")
@@ -318,8 +438,6 @@ class LaunchManagerTab(QWidget):
         else:
             self._custom_status.setText("● Stopped")
             self._custom_status.setStyleSheet("color:gray;")
-        self._node_view.setPlainText(
-            "\n".join(self._node_cache) if self._node_cache else "(no nodes / ros2 unavailable)")
 
     def _set_status(self, text: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")

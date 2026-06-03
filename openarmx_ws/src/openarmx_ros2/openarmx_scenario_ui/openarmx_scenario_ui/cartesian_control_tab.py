@@ -73,6 +73,8 @@ class CartesianControlTab(QWidget):
         # own set (same data, shown in both via the shared grid builder).
         self._jog_joint_labels = {"left": {}, "right": {}}
         self._marker_joint_labels = {"left": {}, "right": {}}
+        # per-arm live Cartesian pose cells (Jog sub-tab) — x/y/z/R/P/Y labels.
+        self._jog_cart_labels = {"left": {}, "right": {}}
 
         # IK pre-check (per-arm Pinocchio numerical solver), lazy-loaded.
         # Cache the latest joint state in radians so we can warm-start IK at
@@ -109,9 +111,11 @@ class CartesianControlTab(QWidget):
         self._pose_timer = QTimer(self)
         self._pose_timer.timeout.connect(self._refresh_pose)
         self._pose_timer.timeout.connect(self._refresh_marker_display)
+        self._pose_timer.timeout.connect(self._refresh_jog_cart)
         self._pose_timer.start(500)
         self._refresh_pose()
         self._refresh_marker_display()
+        self._refresh_jog_cart()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -319,6 +323,8 @@ class CartesianControlTab(QWidget):
         brow.addStretch()
         v.addLayout(brow)
 
+        # Step + velocity on a SINGLE row. Jog is a velocity command;
+        # duration = step / velocity.
         srow = QHBoxLayout()
         srow.addWidget(QLabel("Linear step:"))
         self.cmbLinStep = QComboBox()
@@ -326,33 +332,29 @@ class CartesianControlTab(QWidget):
             self.cmbLinStep.addItem(f"{mm} mm", userData=mm / 1000.0)
         self.cmbLinStep.setCurrentIndex(2)
         srow.addWidget(self.cmbLinStep)
-        srow.addSpacing(20)
+        srow.addSpacing(16)
         srow.addWidget(QLabel("Angular step:"))
         self.cmbAngStep = QComboBox()
         for d in ANG_STEPS_DEG:
             self.cmbAngStep.addItem(f"{d} °", userData=math.radians(d))
         self.cmbAngStep.setCurrentIndex(1)
         srow.addWidget(self.cmbAngStep)
-        srow.addStretch()
-        v.addLayout(srow)
-
-        # Velocity row — jog is a velocity command; duration = step / velocity.
-        vrow = QHBoxLayout()
-        vrow.addWidget(QLabel("Linear velocity:"))
+        srow.addSpacing(16)
+        srow.addWidget(QLabel("Linear velocity:"))
         self.cmbLinVel = QComboBox()
         for v_mm in LIN_VELS_MM_S:
             self.cmbLinVel.addItem(f"{v_mm} mm/s", userData=v_mm / 1000.0)
         self.cmbLinVel.setCurrentIndex(1)  # default 25 mm/s
-        vrow.addWidget(self.cmbLinVel)
-        vrow.addSpacing(20)
-        vrow.addWidget(QLabel("Angular velocity:"))
+        srow.addWidget(self.cmbLinVel)
+        srow.addSpacing(16)
+        srow.addWidget(QLabel("Angular velocity:"))
         self.cmbAngVel = QComboBox()
         for d in ANG_VELS_DEG_S:
             self.cmbAngVel.addItem(f"{d} °/s", userData=math.radians(d))
         self.cmbAngVel.setCurrentIndex(1)
-        vrow.addWidget(self.cmbAngVel)
-        vrow.addStretch()
-        v.addLayout(vrow)
+        srow.addWidget(self.cmbAngVel)
+        srow.addStretch()
+        v.addLayout(srow)
 
         # ---- Per-arm jog (Left | Right) ----
         arms_row = QHBoxLayout()
@@ -387,6 +389,8 @@ class CartesianControlTab(QWidget):
             self.cmbLeftJogFrame = cmb_frame
         else:
             self.cmbRightJogFrame = cmb_frame
+        # Changing the reference frame re-expresses the live Cartesian readout.
+        cmb_frame.currentIndexChanged.connect(self._refresh_jog_cart)
 
         grid = QGridLayout()
         grid.addWidget(QLabel("<b>Translation</b>"), 0, 0, 1, 2)
@@ -410,6 +414,9 @@ class CartesianControlTab(QWidget):
         # Live joint angles for this arm (read-only). The SAME grid builder is
         # reused by the Marker sub-tab so both show identical joint readouts.
         v.addLayout(self._build_joint_angles_grid(arm, self._jog_joint_labels))
+        # Live Cartesian pose for this arm (read-only), with a link7/TCP point
+        # selector — shown in the per-arm Jog frame selected above.
+        v.addLayout(self._build_cart_readout(arm))
         return grp
 
     def _build_joint_angles_grid(self, arm: str, store: dict) -> QGridLayout:
@@ -438,6 +445,85 @@ class CartesianControlTab(QWidget):
             grid.addWidget(wrap, r + 1, c)
             store[arm][jn] = lbl_val
         return grid
+
+    def _build_cart_readout(self, arm: str) -> QVBoxLayout:
+        """Per-arm live Cartesian pose readout with a link7/TCP point selector.
+
+        Same VALUE_CELL_QSS / AXIS_LABEL_QSS look as the joint-angle grid. The
+        pose is expressed in this arm's Jog frame (the dropdown above) and for
+        the EE point chosen here (link7 default, or the hand TCP)."""
+        box = QVBoxLayout()
+        hdr = QHBoxLayout()
+        hdr.addWidget(QLabel("<b>Cartesian pose</b>"))
+        hdr.addSpacing(10)
+        hdr.addWidget(QLabel("point:"))
+        cmb = QComboBox()
+        cmb.addItem("link7", userData=f"openarmx_{arm}_link7")
+        cmb.addItem("TCP", userData=f"openarmx_{arm}_hand_tcp")
+        cmb.currentIndexChanged.connect(self._refresh_jog_cart)
+        hdr.addWidget(cmb)
+        hdr.addStretch()
+        box.addLayout(hdr)
+        if arm == "left":
+            self.cmbLeftEEPoint = cmb
+        else:
+            self.cmbRightEEPoint = cmb
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        labels: dict = {}
+        grid.addWidget(QLabel("<b>Position (m)</b>"), 0, 0, 1, 3)
+        for c, ax in enumerate(("x", "y", "z")):
+            labels[ax] = self._cart_cell(grid, ax, 1, c)
+        grid.addWidget(QLabel("<b>Orientation (deg)</b>"), 2, 0, 1, 3)
+        for c, ax in enumerate(("R", "P", "Y")):
+            labels[ax] = self._cart_cell(grid, ax, 3, c)
+        box.addLayout(grid)
+        self._jog_cart_labels[arm] = labels
+        return box
+
+    def _cart_cell(self, grid: QGridLayout, name: str, row: int, col: int):
+        """One '<name> <value>' readout cell, styled like the joint grid."""
+        lbl_name = QLabel(name)
+        lbl_name.setStyleSheet(AXIS_LABEL_QSS)
+        lbl_val = QLabel("---")
+        lbl_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lbl_val.setStyleSheet(VALUE_CELL_QSS)
+        cell = QHBoxLayout()
+        cell.setContentsMargins(0, 0, 0, 0)
+        cell.setSpacing(6)
+        cell.addWidget(lbl_name)
+        cell.addWidget(lbl_val, 1)
+        wrap = QWidget()
+        wrap.setLayout(cell)
+        grid.addWidget(wrap, row, col)
+        return lbl_val
+
+    def _refresh_jog_cart(self) -> None:
+        """Update both arms' live Cartesian readouts (Jog sub-tab)."""
+        if not hasattr(self, "cmbRightEEPoint"):
+            return  # both arm groups not built yet
+        for arm in ("left", "right"):
+            labels = self._jog_cart_labels.get(arm)
+            if not labels:
+                continue
+            frame_cmb = (self.cmbLeftJogFrame if arm == "left"
+                         else self.cmbRightJogFrame)
+            point_cmb = (self.cmbLeftEEPoint if arm == "left"
+                         else self.cmbRightEEPoint)
+            pose = self._bridge.get_ee_pose(
+                arm, frame_cmb.currentData(), point_cmb.currentData())
+            if not pose:
+                for lbl in labels.values():
+                    lbl.setText("---")
+                continue
+            labels["x"].setText(f"{pose['x']:+.4f}")
+            labels["y"].setText(f"{pose['y']:+.4f}")
+            labels["z"].setText(f"{pose['z']:+.4f}")
+            labels["R"].setText(f"{math.degrees(pose['roll']):+.2f}")
+            labels["P"].setText(f"{math.degrees(pose['pitch']):+.2f}")
+            labels["Y"].setText(f"{math.degrees(pose['yaw']):+.2f}")
 
     def _on_jog_joint_state(self, positions: dict) -> None:
         # Same joint data, shown in BOTH the Jog and Marker sub-tabs.
@@ -528,10 +614,17 @@ class CartesianControlTab(QWidget):
                 start_base = self._bridge.get_ee_pose(
                     arm, cyclo_base, controlled_link)
                 if start_base is not None:
-                    res = checker.check_linear_path(
-                        start_base, target_base, q_seed,
-                        n_steps=self._ik_n_steps)
-                    if not res.reachable:
+                    try:
+                        res = checker.check_linear_path(
+                            start_base, target_base, q_seed,
+                            n_steps=self._ik_n_steps)
+                    except Exception as exc:
+                        # A pre-check failure must NEVER block the jog itself —
+                        # degrade gracefully (publish without the check).
+                        res = None
+                        self._set_status(
+                            f"cyclo jog: IK pre-check skipped ({exc})")
+                    if res is not None and not res.reachable:
                         self._set_status(
                             f"cyclo {arm} {kind}.{axis}{sign:+d}  "
                             f"UNREACHABLE: {res.reason} "
