@@ -7,6 +7,157 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-03 — GUI에서 kill_all 기반 "STOP ALL" 제거 (shm 정리가 살아있는 GUI의 DDS를 깨뜨림)
+
+### 증상
+스택을 한 번 재시작한 뒤 GUI가 /joint_states 를 못 받음(Joint Control Actual "---"·회색, Teaching Capture "/joint_states 미수신", Cartesian Jog 조인트 "---"). EE TF 는 정상. fresh GUI 로 재기동하면 즉시 복구. 사용자: "잘 되었는데 (kill_all 돌린) 수정후에 안됨".
+
+### 원인
+`kill_all_ros2.sh` 는 `/dev/shm/fastrtps_*`(FastDDS 공유메모리) 를 정리한다(ghost participant 제거 목적). 그런데 이 스크립트는 GUI(rclpy, `__node:=` 리맵 없음)를 **죽이지 않고 살려둔다**. 그 결과 **살아남은 GUI 의 shm 기반 DDS 엔드포인트가 그 자리에서 깨지고**, 이후 새로 뜬 publisher(joint_state_broadcaster)와 재매칭에 실패 → 데이터 전달 두절. TF 는 다른 경로라 살아있어 더 헷갈림. (FastDDS 2.6.11; shm 비활성 env 미지원 → XML 프로파일 필요)
+
+### 수정 (사용자 결정: kill_all 은 GUI 에서 빠져야 한다)
+- `ui/scenario_ui.ui` — Scenario Player 탭의 `btnStopAll`("STOP ALL (kill_all_ros2.sh)") 위젯 제거.
+- `main_window.py` — `_stop_all`(kill_all 실행) 메서드 + 시그널 연결 + `_resolve_kill_all_script`/`KILL_ALL_SCRIPT` 죽은 코드 제거.
+- GUI 종료(`closeEvent`)는 기존대로 **GUI 가 띄운 managed 노드/런치만 중단**(각 탭 shutdown→proc.stop, `_hw`/`_player`/workflow/cyclo_extras stop, `ros2 daemon stop`(비파괴)). 전역 kill_all 호출 없음.
+- Launch Manager 의 "Stop All (this tab)" 은 managed `proc.stop()` 만 하므로 유지(kill_all 아님).
+
+### 재발 방지
+- GUI 가 살아있는 채로 **kill_all_ros2.sh(또는 /dev/shm/fastrtps_* 정리)를 실행하지 말 것** — 살아남은 GUI 의 DDS 가 깨진다. 정리는 per-target `pkill`(shm 미정리) 또는 GUI 까지 함께 종료 후 재기동.
+- 노드 종료는 "관련(=내가 띄운) 노드/런치만" 이 원칙. 전역 kill 은 GUI 책임이 아님.
+
+---
+
+## 2026-06-03 — 홈 자세에서 GUI가 /joint_states 못 읽음 (stale self-echo 필터) + Teaching 신규 탭 + Cartesian Jog 좌표표시
+
+### 증상
+- 컨트롤러(JTC) 실행 중인데 **홈/영 자세**에서 GUI 조인트 표시가 "---", Teaching Capture 가 "/joint_states 미수신" 으로 실패. EE TF 는 정상(초록), /joint_states 만 회색. 로봇이 한 번 움직이면 정상화됨(값이 달라져서).
+- (부수) Cartesian Control Jog 탭에 현재 카테시안 좌표 미표시. Teaching 표 선택 행 글자가 흰색이라 안 보임.
+
+### 원인 (근본)
+`joint_control_tab._on_sil_tick` 는 JTC 활성 시 SIL 발행을 건너뛰지만(`traj_subscriber_count()>0`), 브리지의 **self-echo 필터 상태(`_last_self_publish`)를 클리어하지 않음**. 순서: ①GUI 기동(스택 전, JTC 없음) → SIL 이 /joint_states(영) 발행 → `_last_self_publish={0}` ②스택 기동(JTC 활성) → SIL 발행은 멈추나 `_last_self_publish` 잔존 ③joint_state_broadcaster 가 홈(영) 발행 → `_on_joint_state` 가 stale `{0}` 과 일치 → **자기 에코로 오판해 실제 피드백을 전부 드롭**. 즉 SIL 과 JTC 가 /joint_states 를 두고 충돌(이중 소스). 사용자 지적대로 **JTC 실행 시 SIL 은 분리되어야** 함.
+
+### 수정
+1. `joint_control_tab._on_sil_tick` — JTC 활성으로 SIL 발행을 건너뛸 때 `self._bridge.clear_self_echo()` 호출 → stale 필터 제거, 컨트롤러 피드백 항상 통과. (홈에서도 조인트 표시·Teaching Capture 정상 — xwd 캡처로 /joint_states 점 초록·`pose_0` 캡처 +0.0 확인)
+2. **신규 [teaching_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/teaching_tab.py)** — 상하 QSplitter 2 테이블(상: 조인트16+그리퍼, 하: 카테시안), 같은 웨이포인트 2표현, 인라인 편집(관절 clamp·RPY→quat), 자체완결 시나리오 Save(movej/movel+gripper)/Load, Go-to-Pose. `main_window.py` 3곳. 테이블 셀 글자색: 선택행 흰글자 문제 → `color:#222` + `:selected{background:#cfe3fb}`.
+3. `cartesian_control_tab.py` — Jog 탭 per-arm **Cartesian pose 표시 + link7/TCP point 셀렉터**(500ms TF 갱신, 프레임 콤보 변경 시 재계산).
+
+### 재발 방지
+- /joint_states 는 단일 소스. ros2_control(JTC/broadcaster) 실행 중이면 GUI SIL 발행 **금지 + self-echo 필터 클리어**. self-echo 필터는 시간제한 없이 두면 우연히 값이 일치하는 실제 피드백을 삼킨다.
+- "조인트 안 읽힘" 진단 시 EE TF(get_ee_pose) 와 /joint_states(sig_joint_state) 를 분리해 확인 — TF 만 되고 joint 안 되면 self-echo/이중발행 의심.
+
+---
+
+## 2026-06-03 — Pipe Health 전 스트리밍 토픽 0.0 Hz (Diagnostics 2탭 분리 후 카운터 이중 소비) + cyclo 경로 토픽 누락
+
+### 증상
+- Pipe Health 탭에서 `/joint_states`·`/tf` 가 **0.0 Hz(warn)** 로 표시. `/robot_description`(latched)·event 토픽은 정상. 사용자: "토픽이 모두 맞는지?"
+- 실제로는 데이터가 정상 흐름: `ros2 topic echo` 카운트로 `/joint_states` ≈37 Hz(111건/3s), `/tf` 스트리밍, `/dynamic_joint_states` ≈19 Hz, `/openarmx/left/ee_pose` ≈35 Hz 확인. (주의: 이 PC 의 `ros2 topic hz` 는 QoS 무관 항상 0 — 도구 오작동, `echo` 로 검증할 것.)
+
+### 원인
+`scenario_action_client.py:diag_consume_rates()` 는 **읽으면서 per-topic 카운터를 0으로 리셋**(reset-on-read). Diagnostics 를 Node Health(show="node") + Pipe Health(show="topic") **2개 DiagnosticsTab 인스턴스로 분리**하면서, 양쪽 `_refresh` 가 각자 1.5s 타이머로 `diag_consume_rates()` 를 호출 → Node Health 가 rate 를 표시도 안 하면서 카운터를 리셋해 Pipe Health 몫을 0 으로 만듦. "rate" 종류(count 기반)만 영향, latched/event(age 기반)는 무영향 — 증상과 정확히 일치.
+
+### 수정
+1. `diagnostics_tab.py:_refresh` — `diag_consume_rates()` 를 **rate 를 표시하는 탭(show in {both,topic})만** 호출. Node Health 는 소비 안 함(리셋-온-리드 카운터는 단일 소비자 원칙).
+2. `diagnostics_spec.py` TOPIC_SPECS 를 **활성 cyclo MoveL 백엔드 기준**으로 재구성: JTC `/…/joint_trajectory` 2행 제거(액션 구동이라 항상 idle·cyclo 미사용), 추가 = `/dynamic_joint_states`, `/tf_static`, `/openarmx/{l,r}/movel`(MoveL), `/openarmx/{l,r}/ee_pose`(PoseStamped), `/openarmx_{l,r}_movel_controller/controller_error`(String). QoS: 스트리밍/이벤트=best_effort(모든 pub 호환), tf_static=transient_local.
+   - (Pilz/JTC 백엔드 전환 시 joint_trajectory 또는 `/<ctrl>/controller_state` 재추가 — 주석에 명시.)
+
+### 재발 방지
+- reset-on-read 카운터는 **소비자 1개**만. 동일 위젯을 여러 인스턴스로 띄울 때 공유 상태의 파괴적 읽기 주의.
+- 토픽 발행률 진단은 `ros2 topic hz`(이 PC 오작동) 대신 `ros2 topic echo … --field … | 카운트` 로 확인.
+- 모니터링 토픽 SET 은 **현재 활성 모션 백엔드**에 맞춘다(cyclo↔Pilz 경로 상이).
+
+---
+
+## 2026-06-03 — [코드리뷰/H3 · 수정 보류] ai_worker_config.yaml elbow 토픽 불일치 + 이 프로젝트(OpenArmX)는 해당 yaml 미사용
+
+> 20-에이전트 코드리뷰(cyclo_robot_controller) 확정 결함 중 H3. **사용자 지시로 수정 보류 — vr_controller 미사용, VR 은 기본 구동 이후 진행.**
+
+### 증상
+`ai_worker_config.yaml` 에서 `leader_controller` 는 elbow 를 `/r_elbow_pose`,`/l_elbow_pose` 로 발행하고 `vr_controller` 는 `/r_subgoal_pose`,`/l_subgoal_pose` 로 구독 → `leader` 모드에서 elbow 기준값이 전달되지 않아 팔꿈치 리타게팅 불능(손목 추종은 정상).
+
+### 원인 / 핵심 발견
+- 토픽 이름 불일치: `vr_controller`(`:88-89`) vs `leader_controller`(`:115-116`).
+- **그러나 이 프로젝트(OpenArmX)의 실제 VR 통합 `openarmx_motion/launch/openarmx_vr_bimanual.launch.py` 는 `ai_worker_config.yaml` 을 로드하지 않음.** `vr_controller_node` 를 노드명 `openarmx_vr_bimanual_controller` 로 띄우고 모든 파라미터를 **인라인**(OpenArmX 토픽 `/openarmx/{right,left}/elbow_pose`, 링크 `openarmx_*_link4/7`, **`weight_elbow_position: 0.0`=elbow 태스크 비활성**)으로 넘김. ROS2 파라미터는 **노드명 매칭**이라 yaml `vr_controller:` 섹션은 적용되지도 않음.
+- 결론: `ai_worker_config.yaml` 은 ROBOTIS AI Worker **레퍼런스 잔재**. H3 불일치는 현재 OpenArmX 구동에 **무영향**(elbow weight=0, yaml 미로드).
+
+### 수정
+**보류(코드 변경 없음).** 사유: `vr_controller` 는 아직 사용 안 함(기본 구동 우선). VR 작업 재개 시 `ai_worker_config.yaml` 을 OpenArmX 값으로 정렬(또는 레퍼런스 섹션 제거 + openarmx 전용 config 분리) 여부를 결정.
+
+### 재발 방지
+- `ai_worker_config.yaml` 값은 ROBOTIS AI Worker 기준(이 프로젝트 무관)임을 인지. OpenArmX VR 의 실제 SSOT 는 `openarmx_vr_bimanual.launch.py` 인라인 파라미터.
+- "yaml 값이 틀렸다"고 런타임 디버깅하지 말 것 — 런치가 yaml 을 로드하지 않음.
+
+---
+
+## 2026-06-03 — [코드리뷰/H2 · 수정 보류] AI Worker VR/leader 텔레오퍼레이션: 팔로워 그리퍼 명령 미발행 (passthrough 미구현)
+
+> 20-에이전트 코드리뷰(cyclo_robot_controller) 확정 결함 중 H2. **사용자 지시로 수정 보류 — VR 구동 작업 시 함께 처리.**
+
+### 증상
+`controller_type:=vr`(또는 `leader`)로 AI Worker 텔레오퍼레이션 시, 리더 장치의 그리퍼 개폐가 팔로워 그리퍼로 전달되지 않음. 팔/리프트는 동작하나 grab(파지) 불가.
+
+### 원인 (file:line 근거)
+- `vr_controller_node.cpp` 가 리더 raw 궤적에서 그리퍼 위치를 추출해 `right_raw_gripper_position_`/`left_raw_gripper_position_`(콜백 `:346`, `:369`)에 **저장만** 하고, 어떤 발행 경로로도 내보내지 않음 (grep: 읽기 0건).
+- `publishTrajectory` 는 팔(`arm_*_joint`)+lift 만 발행하며 그리퍼 조인트는 **의도적으로 제외**(`:813`,`:820` 주석 "without gripper joint").
+- `r/l_gripper_pose_pub_` 는 측정 FK 자세(레퍼런스 정렬용)일 뿐 명령이 아님. `raw_traj_timeout_` 파라미터(`:78`)도 미사용.
+- 전용 파라미터(`right/left_gripper_joint`)·구독·멤버·timeout 이 모두 갖춰져 있어, 원저자가 passthrough 를 의도하다 **미완성**한 정황. (적대적 검증 통과 — 활성 결함 확정)
+- 참고: 워크스페이스의 그리퍼 명령 경로(`control_msgs/GripperCommand` HIL / `/joint_states` SIL, `scenario_action_client.py`)는 **시나리오 플레이어 경로**로 VR 텔레오퍼레이션과 별개.
+
+### 수정
+**보류(코드 변경 없음).** 사유: VR 구동 자체를 추후 진행 예정이며, 그리퍼 명령 인터페이스(토픽/메시지 타입, 별도 퍼블리셔 vs 팔 궤적 병합)를 함께 설계해야 함.
+정리 일정: **VR 구동 작업 재개 시** (a) 그리퍼 passthrough 구현 또는 (b) 죽은 멤버/콜백 제거 중 택1.
+
+### 재발 방지
+- VR 그리퍼는 현재 동작하지 않음을 전제로 둘 것. "`gripper_pose` 토픽이 있으니 그리퍼가 제어된다"는 오해 금지(그건 측정 FK 관측값).
+- VR 구동 재개 시 본 항목을 먼저 참조.
+
+---
+
+## 2026-06-03 — [코드리뷰/H1 · 수정] OMY MoveJ 노드: 다중포인트 명령 trailing point 재발행 (안전적분 우회)
+
+> 20-에이전트 코드리뷰(cyclo_robot_controller) 확정 결함 중 H1. 수정·빌드 검증 완료.
+
+### 증상
+`omy_movej_controller` 입력 `JointTrajectory` 가 2개 이상 point 를 담으면, 2번째 이후 point(원본 raw 목표+원본 `time_from_start`)가 출력에 그대로 남아 100Hz 로 재발행됨. 하류 Joint Trajectory 컨트롤러가 `point[0]`(QP 적분 스텝)→`point[1..]`(raw 목표)를 보간해 QP/CBF 안전적분을 우회·목표로 점프, time 비단조 시 거부/오동작 가능.
+- 단, 현재 워크스페이스엔 cyclo `~/movej` 로 다중포인트를 발행하는 소스가 없어 **잠재(latent)** — "단일포인트 입력 계약"을 코드로 강제하지 않은 견고성/일관성 갭. (제어 루프는 `movej_goal_`=`points.front()` 단일 목표만 추종하므로 출력의 trailing point 와 불일치)
+
+### 원인
+`makeOutputTrajectory` 가 `latest_movej_command_` 전체를 복사 후 `points.front()` 만 갱신(`omy_movej_controller_node.cpp`). MoveL 은 `trajectory_utils::makeJointTrajectoryMsg(model_joint_names_, …)` 로 매번 깨끗한 단일 포인트를 새로 만드는 것과 불일치(MoveJ 만 입력 메시지 재사용).
+
+### 수정
+`publishTrajectory` 를 MoveL 과 동일하게 `trajectory_utils::makeJointTrajectoryMsg(model_joint_names_, trajectory_time_, q_command)` 로 교체 → **항상 모델 전체 관절·단일 포인트** 발행. `makeOutputTrajectory` 및 죽은 멤버(`latest_movej_command_`, `latest_movej_command_received_`) 제거. (hpp 2곳, cpp 3곳)
+검증: cyclo 스택 클린 재빌드 통과(6 pkg, exit 0), `omy_movej_controller_node` 실행파일 재생성. 부수로 재배치(`cyclo_robot_controller/` 이동)로 깨진 stale `build/`·`install/` 트리 복구(5개 cyclo 패키지).
+
+### 재발 방지
+- 노드 출력 궤적은 항상 컨트롤러 내부 상태(`q_commanded_`)로 `model_joint_names_` 전체를 단일 포인트로 새로 구성. 입력 명령 메시지를 출력 베이스로 재사용 금지.
+- 동일 패턴이 OMX MoveJ(`omx_movej_controller_node`)에도 존재(리뷰 L21) → 같은 패치 적용 예정.
+
+---
+
+## 2026-06-03 — Launch Manager cyclo 타깃 "package 'cyclo_motion_controller_ros' not found" + RViz 노드명 불일치
+
+### 증상
+- Launch Manager 의 L2 cyclo MoveL 타깃 실행 시 `package 'cyclo_motion_controller_ros' not found` 로 실패.
+- "rviz2 실행해도 모니터링 못함" — Launch Manager 상태/Node Health 가 RViz 를 안 떠 있음으로 표시.
+
+### 원인
+1. **cyclo**: GUI(scenario_ui) 프로세스가 15:31:41 기동, `cyclo_motion_controller_ros` 는 15:33:59 빌드 — 패키지가 GUI 기동 *후* 빌드되어 GUI 프로세스의 `AMENT_PREFIX_PATH` 에 해당 prefix 없음. Launch Manager 타깃은 GUI 환경을 상속하므로 동일 누락 → not found. (패키지는 openarmx_ws 안에 정상 존재; cyclo_ws 불필요 — 커밋 e1568f2 에서 `cyclo_robot_controller/` 로 이동됨.)
+2. **rviz**: `launch_manager_tab.py` 의 scenario_rviz 타깃 cmd 가 bare `rviz2` 라 노드명이 `/rviz` 인데, 상태감시용 `nodes` 와 `diagnostics_spec.py` 는 `/openarmx_scenario_rviz` / `/rviz2` 를 기대 → 항상 불일치 → "안 떠 있음".
+
+### 수정
+1. **cyclo**: GUI 를 openarmx_ws/install 재소싱하여 재기동 (`AMENT_PREFIX_PATH` 에 cyclo_motion_controller_ros 포함 확인). 빌드 후 GUI 무재시작 시 환경 stale 됨에 유의.
+2. **rviz 노드명 정합화 (3곳)**:
+   - `launch_manager_tab.py` scenario_rviz cmd 에 `--ros-args -r __node:=openarmx_scenario_rviz` 추가 → 실제 노드명 `/openarmx_scenario_rviz`.
+   - `diagnostics_spec.py` NODE_SPECS `/rviz2` → `/openarmx_scenario_rviz`, OPTIONAL_NODES 동일 치환.
+   - 효과: Launch Manager 상태·Node Health 정상 표시, kill_all_ros2.sh 가 `__node:=` 리맵으로 PID 매핑 가능(종료 가능).
+
+### 재발 방지
+- "package not found" 는 소스(`find package.xml`)·빌드물(`install/`)·git log(이동/리네임) 를 먼저 확인. 메모리 옛 위치 기록 맹신 금지.
+- 패키지를 새로 빌드하면 그 패키지를 쓰는 **실행 중 프로세스(GUI 등)는 재소싱(재기동)** 해야 인식. `/proc/<pid>/environ` 의 AMENT_PREFIX_PATH 와 빌드 시각(stat) 비교로 진단.
+- RViz 등 도구 노드는 launch 시 `__node:=` 로 명시적 노드명 부여 → 상태감시/종료 스크립트와 정합.
+
+---
+
 ## 2026-06-01 23:07 (KST) — yolov8 DetectBox per-goal prompts 라벨 오류 (stale class_names)
 
 ### 증상
@@ -162,5 +313,41 @@ IK pre-check 단독 검증 (`experiments/test_ik_check.py`): +Z 발산 (waypoint
 - cyclo 노드 새 launch 작성 시 항상 원본 `omx_config.yaml` 값을 baseline 으로 사용. 다른 값 쓰면 코멘트로 사유 명시.
 - UI Cartesian linear motion 명령은 publish 전 IK pre-check 통과 필수.
 - Pose dict 핸들러는 quaternion / RPY 양쪽 형식 모두 수용.
+
+---
+
+## 2026-06-03 22:35 (KST) — Launch Manager "EE Leader 마커" 가 RViz 에 안 뜸 (프레임 이름 불일치)
+
+### 증상
+Launch Manager 탭에서 "EE Leader 마커 — RViz 6-DoF 드래그 티칭" Start → 상태는 `Running (this tab)` 이지만 RViz InteractiveMarkers 디스플레이에 마커(빨강/파랑 구체)가 전혀 안 나타남. RViz Displays 패널엔 EE Leader 항목이 `Status: Ok` 로 보임. ("TF 가 존재하는데 왜 안 뜨냐" 는 질문 동반.)
+
+### 원인
+`ee_leader_marker_bimanual.launch.py` 는 의도적으로 robot-agnostic 이라 launch arg 기본값이 placeholder (`base_frame=base_link`, `left/right_controlled_link=left/right_end_effector`, `goal_topic=/ee_leader/<arm>/goal_pose`) 이다 (docstring 에 "포팅 시 변경" 명시). Launch Manager 의 `ee_markers` preset 이 이 기본값을 **override 없이** 그대로 실행 → openarmx TF 트리엔 그 이름의 프레임이 **없다**.
+
+- 마커 노드 [eef_interactive_marker_node.cpp:240-259](openarmx_ws/src/ee_leader_marker/src/eef_interactive_marker_node.cpp#L240-L259) 는 `base_frame → controlled_link` TF lookup **성공 후에만** `create6DofMarker()` 로 InteractiveMarker 를 server 에 insert. 프레임이 없으면 `lookupPose` 가 영구 실패 → 마커가 한 번도 insert 안 됨 → RViz 엔 디스플레이만 있고 마커 없음.
+- 노드 로그(`/tmp/openarmx_scenario_ui_launch_ee_markers.log`)에 `Base frame: base_link` / `Controlled link: left_end_effector` 만 찍히고 `EE Leader Marker initialized from link transform` 줄은 **없음** → init 전 단계에서 멈춘 직접 증거.
+- "TF 존재" 와 "이 프레임 이름 존재" 는 별개. openarmx TF 트리(`openarmx_*`, `d435_*`)는 정상 생존(그래서 Teaching 탭 `EE TF` 점이 녹색이고 Cartesian 포즈가 채워짐). 죽은 건 TF 가 아니라 **잘못된 프레임 이름**. 라이브 검증:
+  - `tf2_echo base_link left_end_effector` → `Terminated` (영구 미해결, 프레임 없음)
+  - `tf2_echo openarmx_body_link0 openarmx_left_link7` → `Translation: [0.181, 0.170, 0.312]` 해결됨 (프레임 존재)
+
+### 수정
+- [launch_manager_tab.py](openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/launch_manager_tab.py) `ee_markers` preset cmd 에 openarmx 전용 인자 추가 — 이미 검증된 SSOT [scenario_player_with_ee_leader.launch.py:138-142](openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/scenario_player_with_ee_leader.launch.py#L138-L142) 와 동일:
+  - `base_frame:=openarmx_body_link0`
+  - `left_controlled_link:=openarmx_left_link7`, `right_controlled_link:=openarmx_right_link7`
+  - `left_goal_topic:=/openarmx/left/ee_leader/goal_pose`, `right_goal_topic:=/openarmx/right/ee_leader/goal_pose`
+- standalone launch 의 generic 기본값은 그대로 둠(의도적 robot-agnostic, 특화는 caller 책임).
+
+### 적용
+symlink-install 이라 colcon 재빌드 불필요. 단, 실행 중인 UI 는 preset 을 메모리에 이미 로드했으므로 `kill_all_ros2.sh` 전체 종료 후 UI 재기동해야 새 인자 반영. 이후 노드 로그에 `EE Leader Marker initialized from link transform` 출력 + 손목에 빨강(우)/파랑(좌) 6-DoF 구체 표시.
+
+### 관련 코드 / 파일
+- `openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/launch_manager_tab.py` (`ee_markers` preset)
+- `openarmx_ws/src/ee_leader_marker/launch/ee_leader_marker_bimanual.launch.py` (robot-agnostic 기본값)
+- `openarmx_ws/src/ee_leader_marker/src/eef_interactive_marker_node.cpp` (init 시 TF lookup 의존)
+- `openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/scenario_player_with_ee_leader.launch.py` (SSOT 인자값)
+
+### 재발 방지
+- robot-agnostic launch (placeholder 기본값) 를 Launch Manager preset 으로 감쌀 때는 반드시 openarmx 전용 프레임/토픽 인자를 명시 override. 기본값(`base_link` 등) 그대로 실행 금지.
+- "마커/디스플레이 안 뜸" 진단 시 노드 로그의 init 완료 줄 유무 + `tf2_echo <base> <child>` 로 **그 프레임 이름이 실제 존재하는지** 확인 (TF 트리 생존 여부와 구분).
 
 ---
