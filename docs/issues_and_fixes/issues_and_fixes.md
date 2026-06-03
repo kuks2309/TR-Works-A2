@@ -350,4 +350,10 @@ symlink-install 이라 colcon 재빌드 불필요. 단, 실행 중인 UI 는 pre
 - robot-agnostic launch (placeholder 기본값) 를 Launch Manager preset 으로 감쌀 때는 반드시 openarmx 전용 프레임/토픽 인자를 명시 override. 기본값(`base_link` 등) 그대로 실행 금지.
 - "마커/디스플레이 안 뜸" 진단 시 노드 로그의 init 완료 줄 유무 + `tf2_echo <base> <child>` 로 **그 프레임 이름이 실제 존재하는지** 확인 (TF 트리 생존 여부와 구분).
 
+### 추가 수정 (2026-06-04 00:23 KST — 구 자체가 안 보임)
+프레임 수정 후 마커는 떴으나 **중심 grab 구(sphere)가 안 보임**. 원인: 구 크기가 `marker.scale * 0.3` (=0.045 m)이라 link7 손목 메쉬 안에 파묻힘 (링/화살표 6-DoF 컨트롤만 보임).
+- 수정: [eef_interactive_marker_node.cpp:117-124](openarmx_ws/src/ee_leader_marker/src/eef_interactive_marker_node.cpp#L117-L124) — 구 `0.3 → 0.8배` (=0.12 m, 링 반경 ~= 손목보다 큼) + `alpha 0.8 → 0.6` (반투명, 링/로봇 비침).
+- **이 노드는 C++ 라 symlink 자동반영 안 됨** → `colcon build --packages-select ee_leader_marker` (25 s) 후 마커 노드 재기동 필요. (Python UI 와의 핵심 차이 — 재발 방지)
+- 검증: 양 손목 link7 에 빨강(우)/파랑(좌) 반투명 구 또렷이 표시 (사용자 확인).
+
 ---

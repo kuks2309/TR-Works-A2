@@ -115,13 +115,16 @@ private:
     // the per-axis arrows/rings below still give precise 6-DoF control.
     visualization_msgs::msg::Marker box_marker;
     box_marker.type = visualization_msgs::msg::Marker::SPHERE;
-    box_marker.scale.x = marker.scale * 0.3;
-    box_marker.scale.y = marker.scale * 0.3;
-    box_marker.scale.z = marker.scale * 0.3;
+    // Ball sized to clearly poke out of the wrist (link7) mesh and sit just
+    // inside the 6-DoF rings. At 0.3x it was buried inside the link and
+    // invisible ("구 자체가 안 보임"); 0.8x ~= ring radius like the reference.
+    box_marker.scale.x = marker.scale * 0.8;
+    box_marker.scale.y = marker.scale * 0.8;
+    box_marker.scale.z = marker.scale * 0.8;
     box_marker.color.r = marker_color_r_;
     box_marker.color.g = marker_color_g_;
     box_marker.color.b = marker_color_b_;
-    box_marker.color.a = 0.8;
+    box_marker.color.a = 0.6;  // translucent so the rings/robot show through
 
     visualization_msgs::msg::InteractiveMarkerControl box_control;
     box_control.always_visible = true;
