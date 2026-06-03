@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-03 12:58 KST — pick_and_place 백엔드별(cyclo/·pilz/) 하위그룹 정리
+
+> "폴더 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/cyclo_robot_controller와 같이 pilz도 폴더를 만들어서 별도로 관리하는 것이 좋지 않을까? 의견 주세요."
+
+> "pick_and_place/
+>   cyclo/   openarmx_cyclo_box_align(_msgs)
+>   pilz/    openarmx_pilz_box_align(_msgs) 으로 좋겠네요"
+
+> "기록 후 킷 커밋 세션 종료"
+
+---
+
 ## 2026-05-22 (KST) — external_reference_handling.md SSOT 신설 + v2 마이그레이션 Step 1-3
 
 > "폴더 /home/amap/Study/ros2_3dslam_ws/docs 를 참조해서 manual.md 분석 부탁"
