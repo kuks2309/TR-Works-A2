@@ -109,11 +109,15 @@ private:
     marker.scale = marker_scale_;
     marker.pose = pose;
 
+    // Center grab handle -- a draggable SPHERE, matching the MoveIt
+    // MotionPlanning interactive marker's centre ball. Grabbing the sphere
+    // moves the goal pose freely in 3D (MOVE_3D) and the follower tracks it;
+    // the per-axis arrows/rings below still give precise 6-DoF control.
     visualization_msgs::msg::Marker box_marker;
-    box_marker.type = visualization_msgs::msg::Marker::CUBE;
-    box_marker.scale.x = marker.scale * 0.2;
-    box_marker.scale.y = marker.scale * 0.2;
-    box_marker.scale.z = marker.scale * 0.2;
+    box_marker.type = visualization_msgs::msg::Marker::SPHERE;
+    box_marker.scale.x = marker.scale * 0.3;
+    box_marker.scale.y = marker.scale * 0.3;
+    box_marker.scale.z = marker.scale * 0.3;
     box_marker.color.r = marker_color_r_;
     box_marker.color.g = marker_color_g_;
     box_marker.color.b = marker_color_b_;
@@ -121,6 +125,9 @@ private:
 
     visualization_msgs::msg::InteractiveMarkerControl box_control;
     box_control.always_visible = true;
+    box_control.name = "move_3d";
+    box_control.interaction_mode =
+      visualization_msgs::msg::InteractiveMarkerControl::MOVE_3D;
     box_control.markers.push_back(box_marker);
     marker.controls.push_back(box_control);
 
