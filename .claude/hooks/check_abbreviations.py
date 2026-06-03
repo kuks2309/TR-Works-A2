@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Stop hook: block the reply if it contains a bare (un-spelled-out) abbreviation.
+"""Stop hook: block the reply if any abbreviation is used WITHOUT an inline
+expansion, on EVERY occurrence.
 
-The user requires every abbreviation to be spelled out on first use as
-"원어(한국어 의미, 약어)" (e.g. "joint trajectory controller(관절 궤적 컨트롤러, JTC)").
-This hook reads the assistant's last message and, for each tracked abbreviation
-that appears WITHOUT its spelled-out keyword anywhere in the message, blocks the
-stop with a reminder so the model revises.
+User rule (mandatory): every time an abbreviation appears it must be written as
+"ABBR(Full Words)" — e.g. "JTC(Joint Trajectory Controller)". Not just the first
+use: EVERY use. So a bare abbreviation token that is not immediately followed by
+"(" is a violation.
+
+Detection: for each tracked abbreviation token, if it appears as a standalone
+word that is NOT immediately followed by "(" (optionally after one space), the
+reply is blocked with a reminder showing the required form.
 
 Loop guard: if stop_hook_active is already set, allow (remind at most once).
 Edit ABBREVIATIONS below to extend the list.
@@ -14,19 +18,20 @@ import json
 import re
 import sys
 
-# abbreviation (word-boundary regex, case-sensitive) -> spell-out keyword that
-# MUST co-occur (case-insensitive) when the abbreviation is used.
+# token -> full words to show in the required "ABBR(Full Words)" form.
 ABBREVIATIONS = [
-    (r"\bJTC\b", "joint trajectory controller"),
-    (r"\bTF\b", "transform"),
-    (r"\bQP\b", "quadratic"),
-    (r"\bCBF\b", "barrier function"),
-    (r"\bEE\b", "end effector"),
-    (r"\bIK\b", "inverse kinematic"),
-    (r"\bFK\b", "forward kinematic"),
-    (r"\bTCP\b", "tool center point"),
-    (r"\bDOF\b", "degrees of freedom"),
-    (r"\bRPY\b", "roll"),
+    ("JTC", "Joint Trajectory Controller"),
+    ("TF", "Transform"),
+    ("QP", "Quadratic Programming"),
+    ("CBF", "Control Barrier Function"),
+    ("EE", "End Effector"),
+    ("IK", "Inverse Kinematics"),
+    ("FK", "Forward Kinematics"),
+    ("TCP", "Tool Center Point"),
+    ("DOF", "Degrees Of Freedom"),
+    ("RPY", "Roll Pitch Yaw"),
+    ("SIL", "Software In the Loop"),
+    ("HIL", "Hardware In the Loop"),
 ]
 
 
@@ -64,19 +69,18 @@ def main():
     text = last_assistant_text(data.get("transcript_path", ""))
     if not text:
         return 0
-    low = text.lower()
-    bare = []
-    for pat, keyword in ABBREVIATIONS:
-        m = re.search(pat, text)
-        if m and keyword.lower() not in low:
-            bare.append(m.group(0))
-    bare = sorted(set(bare))
-    if bare:
+    bad = []
+    for abbr, full in ABBREVIATIONS:
+        # A standalone occurrence NOT immediately followed by "(" (optionally
+        # one space) is a bare abbreviation -> violation.
+        if re.search(rf"\b{re.escape(abbr)}\b(?!\s?\()", text):
+            bad.append(f"{abbr}({full})")
+    bad = sorted(set(bad))
+    if bad:
         reason = (
-            "응답에 풀어쓰지 않은 약어가 있습니다: " + ", ".join(bare) + ". "
-            "첫 등장 시 '원어(한국어 의미, 약어)' 형태로 풀어쓴 뒤 다시 답하세요. "
-            "예: joint trajectory controller(관절 궤적 컨트롤러, JTC), "
-            "transform/좌표 변환(TF)."
+            "약자는 매번 'ABBR(Full Words)' 형태로 병기해야 합니다(첫 등장만이 "
+            "아니라 모든 등장). 병기 없이 단독으로 쓰인 약자가 있습니다. "
+            "다음처럼 고쳐 다시 답하세요: " + ", ".join(bad)
         )
         print(json.dumps({"decision": "block", "reason": reason}))
     return 0
