@@ -29,3 +29,6 @@ Yolo/Yolov8/yolov8_env/
 # ---- OS ----
 .DS_Store
 Thumbs.db
+
+# Claude Code 로컬 설정(머신 종속 절대경로 훅 등)
+.claude/settings.local.json
