@@ -17,9 +17,18 @@
 
   <!-- Phase 1 motion backend deps -->
   <exec_depend>control_msgs</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>shape_msgs</exec_depend>
   <exec_depend>trajectory_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>openarmx_bringup</exec_depend>
+
+  <!-- Hardware-only L0 launch (openarmx_hardware.launch.py): URDF xacro + controllers yaml -->
+  <exec_depend>openarmx_description</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
 
   <!-- EE Leader Marker (RViz 6-DoF interactive marker, PoseStamped output) -->
   <exec_depend>ee_leader_marker</exec_depend>
