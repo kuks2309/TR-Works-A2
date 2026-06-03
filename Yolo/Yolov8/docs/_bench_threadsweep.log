@@ -1,0 +1,93 @@
+############## SCENARIO A: threads=1 (production / ultralytics default) ##############
+==============================================================================
+YOLOv8 CPU inference benchmark
+torch=2.12.0+cu130  cuda_available=False  threads=1  OMP_NUM_THREADS=1
+loadavg(1/5/15)=4.88/8.56/6.42  cpus=8
+frame=640x480  imgsz=640  conf=0.1  iou=0.5  warmup=2  iters=15
+==============================================================================
+
+--- /home/openarmx/TR-Works/kkw/China/3d_detect_ws/yolov8n.pt ---
+  prompts        : None
+  detections(last): 3
+  mean   :    523.6 ms   (1.91 FPS)
+  median :    389.1 ms
+  p95    :    744.6 ms
+  min/max: 178.0 / 1975.1 ms
+  ultralytics speed  pre=8.2  inf=510.6  post=3.6 ms
+  10Hz (<=100ms) -> FAIL
+
+--- /home/openarmx/TR-Works/kkw/China/yolov8s-world.pt ---
+  prompts        : ['cardboard box', 'box', 'carton', 'package']
+  detections(last): 0
+  mean   :    780.8 ms   (1.28 FPS)
+  median :    677.4 ms
+  p95    :   1115.5 ms
+  min/max: 544.1 / 1277.8 ms
+  ultralytics speed  pre=6.8  inf=772.0  post=0.8 ms
+  10Hz (<=100ms) -> FAIL
+
+--- /home/openarmx/TR-Works/kkw/China/yolov8l-worldv2.pt ---
+  prompts        : ['cardboard box', 'box', 'carton', 'package']
+  detections(last): 0
+  mean   :   3169.6 ms   (0.32 FPS)
+  median :   2878.3 ms
+  p95    :   4436.3 ms
+  min/max: 2064.3 / 5162.7 ms
+  ultralytics speed  pre=8.9  inf=3158.9  post=1.1 ms
+  10Hz (<=100ms) -> FAIL
+
+==============================================================================
+model                          mean_ms     fps   10Hz
+------------------------------------------------------------------------------
+yolov8n.pt                       523.6    1.91   FAIL
+yolov8s-world.pt                 780.8    1.28   FAIL
+yolov8l-worldv2.pt              3169.6    0.32   FAIL
+loadavg after run (1/5/15) = 9.89/9.30/6.90
+==============================================================================
+
+############## SCENARIO B: threads=8 (all logical cores, best-case) ##############
+==============================================================================
+YOLOv8 CPU inference benchmark
+torch=2.12.0+cu130  cuda_available=False  threads=8  OMP_NUM_THREADS=1
+loadavg(1/5/15)=9.05/9.14/6.87  cpus=8
+frame=640x480  imgsz=640  conf=0.1  iou=0.5  warmup=2  iters=15
+==============================================================================
+
+--- /home/openarmx/TR-Works/kkw/China/3d_detect_ws/yolov8n.pt ---
+  prompts        : None
+  detections(last): 3
+  mean   :    401.8 ms   (2.49 FPS)
+  median :    415.3 ms
+  p95    :    510.2 ms
+  min/max: 250.7 / 642.2 ms
+  ultralytics speed  pre=6.5  inf=389.1  post=4.0 ms
+  10Hz (<=100ms) -> FAIL
+
+--- /home/openarmx/TR-Works/kkw/China/yolov8s-world.pt ---
+  prompts        : ['cardboard box', 'box', 'carton', 'package']
+  detections(last): 0
+  mean   :    507.3 ms   (1.97 FPS)
+  median :    407.1 ms
+  p95    :    737.5 ms
+  min/max: 354.7 / 1194.5 ms
+  ultralytics speed  pre=2.8  inf=503.5  post=0.7 ms
+  10Hz (<=100ms) -> FAIL
+
+--- /home/openarmx/TR-Works/kkw/China/yolov8l-worldv2.pt ---
+  prompts        : ['cardboard box', 'box', 'carton', 'package']
+  detections(last): 0
+  mean   :   1404.2 ms   (0.71 FPS)
+  median :   1407.5 ms
+  p95    :   1463.0 ms
+  min/max: 1329.9 / 1482.4 ms
+  ultralytics speed  pre=4.1  inf=1398.3  post=1.1 ms
+  10Hz (<=100ms) -> FAIL
+
+==============================================================================
+model                          mean_ms     fps   10Hz
+------------------------------------------------------------------------------
+yolov8n.pt                       401.8    2.49   FAIL
+yolov8s-world.pt                 507.3    1.97   FAIL
+yolov8l-worldv2.pt              1404.2    0.71   FAIL
+loadavg after run (1/5/15) = 8.83/9.08/6.98
+==============================================================================
