@@ -61,7 +61,6 @@ private:
   void moveLCallback(const openarmx_scenario_player_msgs::msg::MoveL::SharedPtr msg);
   void controlLoopCallback();
 
-  Eigen::Affine3d poseMsgToEigen(const geometry_msgs::msg::PoseStamped & pose_msg) const;
   cyclo_motion_controller::common::Vector6d computeDesiredVelocity(
     const Eigen::Affine3d & current_pose,
     const Eigen::Affine3d & goal_pose,

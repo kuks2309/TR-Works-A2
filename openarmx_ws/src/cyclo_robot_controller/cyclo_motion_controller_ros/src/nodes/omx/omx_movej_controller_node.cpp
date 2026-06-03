@@ -19,6 +19,7 @@
 #include "common/type_define.hpp"
 #include "cyclo_motion_controller_ros/utils/controller_params.hpp"
 #include "cyclo_motion_controller_ros/utils/pose_utils.hpp"
+#include "cyclo_motion_controller_ros/utils/trajectory_utils.hpp"
 
 namespace cyclo_motion_controller_ros
 {
@@ -177,48 +178,8 @@ void OmxMoveJControllerNode::publishCurrentPose(const Eigen::Affine3d & pose) co
 
 void OmxMoveJControllerNode::publishTrajectory(const Eigen::VectorXd & q_command) const
 {
-  joint_command_pub_->publish(makeOutputTrajectory(q_command));
-}
-
-trajectory_msgs::msg::JointTrajectory OmxMoveJControllerNode::makeOutputTrajectory(
-  const Eigen::VectorXd & q_command) const
-{
-  trajectory_msgs::msg::JointTrajectory traj_msg;
-  if (latest_movej_command_received_) {
-    traj_msg = latest_movej_command_;
-  } else {
-    traj_msg.joint_names = model_joint_names_;
-    traj_msg.points.resize(1);
-  }
-
-  if (traj_msg.points.empty()) {
-    traj_msg.points.resize(1);
-  }
-
-  auto & point = traj_msg.points.front();
-  if (point.positions.size() < traj_msg.joint_names.size()) {
-    point.positions.resize(traj_msg.joint_names.size(), 0.0);
-  }
-  if (!point.velocities.empty() && point.velocities.size() < traj_msg.joint_names.size()) {
-    point.velocities.resize(traj_msg.joint_names.size(), 0.0);
-  }
-  point.time_from_start = rclcpp::Duration::from_seconds(trajectory_time_);
-
-  for (size_t i = 0; i < traj_msg.joint_names.size(); ++i) {
-    const auto model_it = model_joint_index_map_.find(traj_msg.joint_names[i]);
-    if (model_it == model_joint_index_map_.end()) {
-      continue;
-    }
-    const int model_idx = model_it->second;
-    if (model_idx >= 0 && model_idx < q_command.size()) {
-      point.positions[i] = q_command[model_idx];
-      if (!point.velocities.empty()) {
-        point.velocities[i] = 0.0;
-      }
-    }
-  }
-
-  return traj_msg;
+  joint_command_pub_->publish(
+    trajectory_utils::makeJointTrajectoryMsg(model_joint_names_, trajectory_time_, q_command));
 }
 
 void OmxMoveJControllerNode::publishControllerError(const std::string & error) const
@@ -306,8 +267,6 @@ void OmxMoveJControllerNode::moveJCallback(
   movej_start_ = q_commanded_;
   movej_goal_ = target_q;
   movej_target_initialized_ = true;
-  latest_movej_command_ = *msg;
-  latest_movej_command_received_ = true;
 }
 
 void OmxMoveJControllerNode::controlLoopCallback()
