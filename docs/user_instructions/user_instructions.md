@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-06-03 16:18 KST — openarmx_pick 분석·문서화 + pick_and_place/cyclo/로 이동
+
+> "폴더 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_pick 에 대해서 분석하고 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_pick/docs 에 기록 팀 20명 최대 투입.."
+
+> "/home/openarmx/TR-Works/kkw/China/openarmx_ws/src/pick_and_place 로 이동 해야 할 것 같은데 pick_and_place 에서 대상물에 따라서 다르니 .."
+
+> "중복된 기능들이 많고 추후에 만든것이 더 효과적이 않나? 대상물만 action msg수정하면"
+
+> "box_align이 의존하는 (B) solver + openarmx_movel_bimanual.launch.py 를 어디에 둘지입니다: <- 이것이 왜 필요?"
+
+> "그러면 결국 planner sovler 가 cyclo  pilz가 아니라는 것인데"
+
+> "지금처럼 패키지를 두 벌 두지 않음 <- 이건 나의 정책임 명확히 구분하려고 함"
+
+> "이동 만 하고 나중에.... 진행"
+
+> "관련 문서 깃 커밋 푸쉬"
+
+> "재빌드"
+
+> "기록, 커밋  푸쉬"
+
+---
+
 ## 2026-06-03 13:40 KST — Yolov8 CPU 추론 속도 10Hz 검증 + 문서화
 
 > "폴더 /home/openarmx/TR-Works/kkw/China/Yolo 에서 v8로 구현한  Yolov8 cpu 수행 속도를 검증해주세요."
