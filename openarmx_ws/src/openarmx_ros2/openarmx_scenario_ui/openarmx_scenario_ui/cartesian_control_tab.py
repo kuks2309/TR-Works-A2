@@ -16,7 +16,7 @@ from datetime import datetime
 
 import numpy as np
 from ament_index_python.packages import get_package_share_directory
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox,
     QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton, QRadioButton,
@@ -51,6 +51,16 @@ PLANNERS = [
     ("OMPL", "OMPL (default)"),
 ]
 
+# Shared value-notation styles — every Cartesian sub-tab (Marker / Jog /
+# Manual) renders numeric values with the SAME font + cell so the three
+# sub-tabs read identically. Units live in the bold "<...(unit)>" section
+# header, never inline on the value, so all displays match.
+VALUE_CELL_QSS = (
+    "font-family:monospace; min-width:72px; padding:6px 10px; "
+    "background:#f0f0f0; border:1px solid #d4d4d4; border-radius:3px;"
+)
+AXIS_LABEL_QSS = "font-weight:bold; min-width:16px;"
+
 
 class CartesianControlTab(QWidget):
     def __init__(self, bridge, parent=None) -> None:
@@ -59,8 +69,10 @@ class CartesianControlTab(QWidget):
         self._current_pose = None
         self._busy = False
 
-        # per-arm Jog tab joint angle labels (filled in by _build_arm_jog_group)
+        # per-arm joint angle labels — Jog and Marker sub-tabs each get their
+        # own set (same data, shown in both via the shared grid builder).
         self._jog_joint_labels = {"left": {}, "right": {}}
+        self._marker_joint_labels = {"left": {}, "right": {}}
 
         # IK pre-check (per-arm Pinocchio numerical solver), lazy-loaded.
         # Cache the latest joint state in radians so we can warm-start IK at
@@ -91,11 +103,15 @@ class CartesianControlTab(QWidget):
         self._drag_debounce.setSingleShot(True)
         self._drag_debounce.timeout.connect(self._on_drag_release)
 
-        # auto-refresh current pose every 500ms (cheap TF lookup)
+        # auto-refresh current pose every 500ms (cheap TF lookup). Also keep
+        # the marker tab's left/right coordinate readout live (marker pose, or
+        # EE-pose TF fallback) so it never sits empty.
         self._pose_timer = QTimer(self)
         self._pose_timer.timeout.connect(self._refresh_pose)
+        self._pose_timer.timeout.connect(self._refresh_marker_display)
         self._pose_timer.start(500)
         self._refresh_pose()
+        self._refresh_marker_display()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -172,6 +188,9 @@ class CartesianControlTab(QWidget):
     def _build_ee_leader(self) -> QGroupBox:
         grp = QGroupBox("EE Leader Marker (RViz)")
         v = QVBoxLayout(grp)
+
+        # ---- Shared setting (applies to BOTH arms) — mirrors the Jog
+        # sub-tab's top "Backend" row so the two tabs read the same way. ----
         trow = QHBoxLayout()
         self.chkUseMarker = QCheckBox(
             f"Use EE Leader Marker  "
@@ -181,39 +200,91 @@ class CartesianControlTab(QWidget):
         trow.addStretch()
         v.addLayout(trow)
 
-        # Per-arm marker pose display (both arms shown side-by-side, consistent
-        # with the Jog sub-tab's per-arm Joint angles layout).
-        self._lbl_marker_pos = {"left": None, "right": None}
-        self._lbl_marker_rot = {"left": None, "right": None}
-        for arm in ("left", "right"):
-            grp_arm = QGroupBox(f"{arm.capitalize()} Arm")
-            varm = QVBoxLayout(grp_arm)
-            self._lbl_marker_pos[arm] = QLabel("x ---   y ---   z ---")
-            self._lbl_marker_pos[arm].setStyleSheet(
-                "font-family:monospace; font-size:12px; color:#555;")
-            varm.addWidget(self._lbl_marker_pos[arm])
-            self._lbl_marker_rot[arm] = QLabel("R ---°  P ---°  Y ---°  (no data)")
-            self._lbl_marker_rot[arm].setStyleSheet(
-                "font-family:monospace; font-size:12px; color:#555;")
-            varm.addWidget(self._lbl_marker_rot[arm])
-            v.addWidget(grp_arm)
-        # Back-compat aliases for any external code still referring to single
-        # labels: point them at the right-arm row.
-        self.lblMarkerPos = self._lbl_marker_pos["right"]
-        self.lblMarkerRot = self._lbl_marker_rot["right"]
+        # ---- Per-arm columns (Left | Right) side-by-side, consistent with
+        # the Jog sub-tab's per-arm layout. Each column owns its own pose
+        # readout + action buttons (operates on that arm, independent of the
+        # header Arm dropdown — same convention as the Jog buttons). ----
+        self._lbl_marker_vals = {"left": {}, "right": {}}     # per-arm x/y/z/R/P/Y cells
+        self._lbl_marker_src = {"left": None, "right": None}  # per-arm source tag
+        self._btn_capture_marker = {"left": None, "right": None}
+        self._btn_marker_to_target = {"left": None, "right": None}
+        arms_row = QHBoxLayout()
+        arms_row.setSpacing(16)
+        arms_row.addWidget(self._build_arm_marker_group("Left Arm",  "left"), 1)
+        arms_row.addWidget(self._build_arm_marker_group("Right Arm", "right"), 1)
+        v.addLayout(arms_row)
 
-        brow = QHBoxLayout()
-        self.btnCaptureMarker = QPushButton("Capture marker → MoveL Step")
-        self.btnCaptureMarker.clicked.connect(self._on_capture_marker)
-        self.btnCaptureMarker.setEnabled(False)
-        brow.addWidget(self.btnCaptureMarker)
-        self.btnMarkerToTarget = QPushButton("Marker → Absolute Target")
-        self.btnMarkerToTarget.clicked.connect(self._on_marker_to_target)
-        self.btnMarkerToTarget.setEnabled(False)
-        brow.addWidget(self.btnMarkerToTarget)
-        brow.addStretch()
-        v.addLayout(brow)
+        # Back-compat aliases for any external code still referring to the
+        # single-button names: point them at the right-arm column.
+        self.btnCaptureMarker = self._btn_capture_marker["right"]
+        self.btnMarkerToTarget = self._btn_marker_to_target["right"]
         return grp
+
+    def _build_arm_marker_group(self, title: str, arm: str) -> QGroupBox:
+        grp = QGroupBox(title)
+        v = QVBoxLayout(grp)
+        v.setSpacing(8)
+
+        v.addWidget(QLabel("<b>Marker pose (RViz 6-DoF drag)</b>"))
+
+        # Position (m) + Orientation (deg) as labeled value cells. Same visual
+        # language as the Jog sub-tab's "Joint angles (deg)" grid: default font
+        # size (NOT shrunk) + gray value box, so both tabs read consistently.
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        grid.addWidget(QLabel("<b>Position (m)</b>"), 0, 0, 1, 3)
+        for col, key in enumerate(("x", "y", "z")):
+            self._add_marker_cell(grid, arm, key, 1, col)
+        grid.addWidget(QLabel("<b>Orientation (deg)</b>"), 2, 0, 1, 3)
+        for col, key in enumerate(("R", "P", "Y")):
+            self._add_marker_cell(grid, arm, key, 3, col)
+        for c in range(3):
+            grid.setColumnStretch(c, 1)
+        v.addLayout(grid)
+
+        self._lbl_marker_src[arm] = QLabel("source: ---")
+        self._lbl_marker_src[arm].setStyleSheet("color:#888;")
+        v.addWidget(self._lbl_marker_src[arm])
+
+        # Live joint angles — same grid/style as the Jog sub-tab (consistency).
+        v.addLayout(self._build_joint_angles_grid(arm, self._marker_joint_labels))
+
+        v.addSpacing(8)
+        btn_cap = QPushButton("Capture marker → MoveL Step")
+        btn_cap.setMinimumHeight(34)
+        btn_cap.clicked.connect(
+            lambda _=False, a=arm: self._on_capture_marker(a))
+        btn_cap.setEnabled(False)
+        v.addWidget(btn_cap)
+        btn_tgt = QPushButton("Marker → Absolute Target")
+        btn_tgt.setMinimumHeight(34)
+        btn_tgt.clicked.connect(
+            lambda _=False, a=arm: self._on_marker_to_target(a))
+        btn_tgt.setEnabled(False)
+        v.addWidget(btn_tgt)
+        self._btn_capture_marker[arm] = btn_cap
+        self._btn_marker_to_target[arm] = btn_tgt
+        return grp
+
+    def _add_marker_cell(self, grid: QGridLayout, arm: str, key: str,
+                         row: int, col: int) -> None:
+        """One labeled value cell (axis name + gray value box) mirroring the
+        Jog sub-tab's joint-angle cells — default font size, no shrink."""
+        lbl_name = QLabel(key)
+        lbl_name.setStyleSheet(AXIS_LABEL_QSS)
+        lbl_val = QLabel("---")
+        lbl_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lbl_val.setStyleSheet(VALUE_CELL_QSS)
+        cell = QHBoxLayout()
+        cell.setContentsMargins(0, 0, 0, 0)
+        cell.setSpacing(6)
+        cell.addWidget(lbl_name)
+        cell.addWidget(lbl_val, 1)
+        wrap = QWidget()
+        wrap.setLayout(cell)
+        grid.addWidget(wrap, row, col)
+        self._lbl_marker_vals[arm][key] = lbl_val
 
     def _build_current_pose(self) -> QGroupBox:
         grp = QGroupBox("Current EE Pose (link7 in selected frame)")
@@ -336,36 +407,52 @@ class CartesianControlTab(QWidget):
         grid.setColumnStretch(5, 1)
         v.addLayout(grid)
 
-        # Live joint angles for this arm (read-only). Updated by
-        # sig_joint_state → _on_jog_joint_state. arms in deg.
-        joints_grid = QGridLayout()
-        joints_grid.addWidget(QLabel("<b>Joint angles (deg)</b>"),
-                              0, 0, 1, 4)
+        # Live joint angles for this arm (read-only). The SAME grid builder is
+        # reused by the Marker sub-tab so both show identical joint readouts.
+        v.addLayout(self._build_joint_angles_grid(arm, self._jog_joint_labels))
+        return grp
+
+    def _build_joint_angles_grid(self, arm: str, store: dict) -> QGridLayout:
+        """'<b>Joint angles (deg)</b>' j1..j7 cell grid — shared by the Jog and
+        Marker sub-tabs. Registers each value label into store[arm][joint] and
+        uses the same VALUE_CELL_QSS / AXIS_LABEL_QSS as every other readout."""
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        grid.addWidget(QLabel("<b>Joint angles (deg)</b>"), 0, 0, 1, 4)
         for i in range(1, 8):
             jn = f"openarmx_{arm}_joint{i}"
             r, c = divmod(i - 1, 4)
             lbl_name = QLabel(f"j{i}")
+            lbl_name.setStyleSheet(AXIS_LABEL_QSS)
             lbl_val = QLabel("---")
-            lbl_val.setStyleSheet(
-                "font-family:monospace; min-width:55px; "
-                "padding:2px 6px; background:#f0f0f0;")
+            lbl_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            lbl_val.setStyleSheet(VALUE_CELL_QSS)
             cell = QHBoxLayout()
+            cell.setContentsMargins(0, 0, 0, 0)
+            cell.setSpacing(6)
             cell.addWidget(lbl_name)
-            cell.addWidget(lbl_val)
+            cell.addWidget(lbl_val, 1)
             wrap = QWidget()
             wrap.setLayout(cell)
-            joints_grid.addWidget(wrap, r + 1, c)
-            self._jog_joint_labels[arm][jn] = lbl_val
-        v.addLayout(joints_grid)
-        return grp
+            grid.addWidget(wrap, r + 1, c)
+            store[arm][jn] = lbl_val
+        return grid
 
     def _on_jog_joint_state(self, positions: dict) -> None:
+        # Same joint data, shown in BOTH the Jog and Marker sub-tabs.
         for arm in ("left", "right"):
-            for jn, lbl in self._jog_joint_labels[arm].items():
-                if jn in positions:
-                    lbl.setText(f"{positions[jn]:+7.2f}°")
-                    # Cache in radians for IK pre-check warm-start.
-                    self._latest_arm_q_rad[arm][jn] = math.radians(positions[jn])
+            for i in range(1, 8):
+                jn = f"openarmx_{arm}_joint{i}"
+                if jn not in positions:
+                    continue
+                txt = f"{positions[jn]:+.2f}"
+                if jn in self._jog_joint_labels[arm]:
+                    self._jog_joint_labels[arm][jn].setText(txt)
+                if jn in self._marker_joint_labels[arm]:
+                    self._marker_joint_labels[arm][jn].setText(txt)
+                # Cache in radians for IK pre-check warm-start.
+                self._latest_arm_q_rad[arm][jn] = math.radians(positions[jn])
 
     def _get_ik_checker(self, arm: str):
         """Lazy-load the per-arm LinearReachabilityChecker (Pinocchio)."""
@@ -554,21 +641,33 @@ class CartesianControlTab(QWidget):
         mrow.addStretch()
         v.addLayout(mrow)
 
+        # Same notation as the Marker sub-tab: "Position (m)" x/y/z then
+        # "Orientation (deg)" R/P/Y. Axis labels are plain x/y/z (NOT Δx) —
+        # whether the values are deltas or absolutes is conveyed by the Mode
+        # radio above, so the labels stay identical across sub-tabs.
         grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
         self.spnX = self._mkpos()
         self.spnY = self._mkpos()
         self.spnZ = self._mkpos()
         self.spnRX = self._mkrot()
         self.spnRY = self._mkrot()
         self.spnRZ = self._mkrot()
-        for col, (lbl, w) in enumerate((("Δx", self.spnX), ("Δy", self.spnY),
-                                        ("Δz", self.spnZ))):
-            grid.addWidget(QLabel(lbl), 0, col * 2)
-            grid.addWidget(w, 0, col * 2 + 1)
-        for col, (lbl, w) in enumerate((("ΔR", self.spnRX), ("ΔP", self.spnRY),
-                                        ("ΔY", self.spnRZ))):
-            grid.addWidget(QLabel(lbl), 1, col * 2)
+        grid.addWidget(QLabel("<b>Position (m)</b>"), 0, 0, 1, 6)
+        for col, (lbl, w) in enumerate((("x", self.spnX), ("y", self.spnY),
+                                        ("z", self.spnZ))):
+            name = QLabel(lbl)
+            name.setStyleSheet(AXIS_LABEL_QSS)
+            grid.addWidget(name, 1, col * 2)
             grid.addWidget(w, 1, col * 2 + 1)
+        grid.addWidget(QLabel("<b>Orientation (deg)</b>"), 2, 0, 1, 6)
+        for col, (lbl, w) in enumerate((("R", self.spnRX), ("P", self.spnRY),
+                                        ("Y", self.spnRZ))):
+            name = QLabel(lbl)
+            name.setStyleSheet(AXIS_LABEL_QSS)
+            grid.addWidget(name, 3, col * 2)
+            grid.addWidget(w, 3, col * 2 + 1)
         v.addLayout(grid)
         return grp
 
@@ -577,8 +676,8 @@ class CartesianControlTab(QWidget):
         s.setRange(-2.0, 2.0)
         s.setSingleStep(0.001)
         s.setDecimals(4)
-        s.setSuffix(" m")
         s.setValue(0.0)
+        s.setStyleSheet("font-family:monospace; padding:4px 6px;")
         return s
 
     def _mkrot(self) -> QDoubleSpinBox:
@@ -586,8 +685,8 @@ class CartesianControlTab(QWidget):
         s.setRange(-180.0, 180.0)
         s.setSingleStep(0.5)
         s.setDecimals(2)
-        s.setSuffix(" °")
         s.setValue(0.0)
+        s.setStyleSheet("font-family:monospace; padding:4px 6px;")
         return s
 
     def _build_actions(self) -> QGroupBox:
@@ -685,8 +784,9 @@ class CartesianControlTab(QWidget):
     # ------------------------------------------------------------------
 
     def _on_marker_use_toggled(self, checked: bool) -> None:
-        self.btnCaptureMarker.setEnabled(checked)
-        self.btnMarkerToTarget.setEnabled(checked)
+        for arm in ("left", "right"):
+            self._btn_capture_marker[arm].setEnabled(checked)
+            self._btn_marker_to_target[arm].setEnabled(checked)
         if not checked:
             self._drag_debounce.stop()
         self._refresh_marker_display()
@@ -724,32 +824,40 @@ class CartesianControlTab(QWidget):
                           frame_id_override=pose["frame_id"])
 
     def _refresh_marker_display(self) -> None:
-        toggle_on = self.chkUseMarker.isChecked()
+        # Coordinates are ALWAYS shown (not gated by the checkbox) so the user
+        # can read both arms' poses at a glance, consistent with the Jog tab's
+        # always-live joint angles. Source priority:
+        #   1) last marker goal_pose from RViz drag (the leader target)
+        #   2) live EE pose via TF (the idle marker tracks this link) so the
+        #      readout never sits empty just because no drag has happened yet.
         for arm in ("left", "right"):
-            lbl_pos = self._lbl_marker_pos[arm]
-            lbl_rot = self._lbl_marker_rot[arm]
-            if not toggle_on:
-                lbl_pos.setText("x ---   y ---   z ---")
-                lbl_rot.setText("R ---°  P ---°  Y ---°  (toggle off)")
-                continue
+            vals = self._lbl_marker_vals[arm]
             pose = self._bridge.get_marker_pose(arm)
+            if pose is not None:
+                src = f"source: marker goal_pose · {pose['frame_id']}"
+            else:
+                pose = self._bridge.get_ee_pose(arm, "openarmx_body_link0")
+                src = "source: live EE (TF) · openarmx_body_link0"
             if pose is None:
-                lbl_pos.setText("x ---   y ---   z ---")
-                lbl_rot.setText("R ---°  P ---°  Y ---°  (no data — drag the marker in RViz)")
+                for k in ("x", "y", "z", "R", "P", "Y"):
+                    vals[k].setText("---")
+                self._lbl_marker_src[arm].setText("source: — (no TF, bringup down?)")
                 continue
-            lbl_pos.setText(
-                f"x {pose['x']:+.4f} m   y {pose['y']:+.4f} m   "
-                f"z {pose['z']:+.4f} m   [{pose['frame_id']}]")
-            lbl_rot.setText(
-                f"R {math.degrees(pose['roll']):+7.2f}°  "
-                f"P {math.degrees(pose['pitch']):+7.2f}°  "
-                f"Y {math.degrees(pose['yaw']):+7.2f}°")
+            vals["x"].setText(f"{pose['x']:+.4f}")
+            vals["y"].setText(f"{pose['y']:+.4f}")
+            vals["z"].setText(f"{pose['z']:+.4f}")
+            vals["R"].setText(f"{math.degrees(pose['roll']):+.2f}")
+            vals["P"].setText(f"{math.degrees(pose['pitch']):+.2f}")
+            vals["Y"].setText(f"{math.degrees(pose['yaw']):+.2f}")
+            self._lbl_marker_src[arm].setText(src)
 
-    def _on_marker_to_target(self) -> None:
-        pose = self._bridge.get_marker_pose(self._current_arm())
+    def _on_marker_to_target(self, arm: str = "") -> None:
+        arm = arm or self._current_arm()
+        pose = self._bridge.get_marker_pose(arm)
         if pose is None:
             QMessageBox.warning(self, "Marker → Target",
-                                "No marker pose received yet. Drag the marker in RViz first.")
+                                f"No {arm}-arm marker pose received yet. "
+                                "Drag the marker in RViz first.")
             return
         self.rdoAbs.setChecked(True)
         self.spnX.setValue(pose["x"])
@@ -762,12 +870,13 @@ class CartesianControlTab(QWidget):
             f"Marker pose copied to Absolute target (frame: {pose['frame_id']}). "
             f"NOTE: change Frame dropdown to match if needed.")
 
-    def _on_capture_marker(self) -> None:
-        arm = self._current_arm()
+    def _on_capture_marker(self, arm: str = "") -> None:
+        arm = arm or self._current_arm()
         pose = self._bridge.get_marker_pose(arm)
         if pose is None:
             QMessageBox.warning(self, "Capture marker",
-                                "No marker pose received yet. Drag the marker in RViz first.")
+                                f"No {arm}-arm marker pose received yet. "
+                                "Drag the marker in RViz first.")
             return
         name, ok = QInputDialog.getText(
             self, "Capture marker as MoveL Step", "Step name:")
