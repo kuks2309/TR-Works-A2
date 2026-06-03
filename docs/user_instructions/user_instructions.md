@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-03 13:40 KST — Yolov8 CPU 추론 속도 10Hz 검증 + 문서화
+
+> "폴더 /home/openarmx/TR-Works/kkw/China/Yolo 에서 v8로 구현한  Yolov8 cpu 수행 속도를 검증해주세요."
+
+> "10hz가 나온느지 검증하고 검정 결과를 /home/openarmx/TR-Works/kkw/China/Yolo/Yolov8/docs 에 문서화 해주세요."
+
+> "깃 커밋 푸쉬"
+
+> "세션 종료 하도록 기록 깃 커밋 푸쉬 완료"
+
+---
+
 ## 2026-06-03 12:58 KST — pick_and_place 백엔드별(cyclo/·pilz/) 하위그룹 정리
 
 > "폴더 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/cyclo_robot_controller와 같이 pilz도 폴더를 만들어서 별도로 관리하는 것이 좋지 않을까? 의견 주세요."
