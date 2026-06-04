@@ -383,3 +383,16 @@ symlink-install 이라 colcon 재빌드 불필요. 단, 실행 중인 UI 는 pre
 - 검증: 양 손목 link7 에 빨강(우)/파랑(좌) 반투명 구 또렷이 표시 (사용자 확인).
 
 ---
+
+## 2026-06-04 23:41 (KST) — 세션 정리: HW 브링업 중복 RViz 제거 + IK 솔버 KDL→LMA
+
+### 1. HW 하드웨어 브링업 시 RViz 2개 (중복)
+- 증상: HW 하드웨어 브링업하면 RViz 창이 2개 뜸 (a2-scenario).
+- 원인: scenario_player workflow launch 가 이미 `openarmx_scenario.rviz` 를 소유하는데, HW 브링업(`HW_LAUNCH_CMD`)도 자체 `bimanual.rviz` 를 spawn.
+- 수정: [main_window.py](openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py) `HW_LAUNCH_CMD` 에 `start_rviz:=false` 추가. RViz 는 scenario workflow 가 단독 소유 (RViz 자체는 반드시 뜨되 중복만 금지 — [[feedback_rviz_must_always_spawn]] 와 충돌 아님).
+
+### 2. MoveIt IK 솔버 KDL → LMA + timeout 확대
+- 변경: [kinematics.yaml](openarmx_ws/src/openarmx_ros2/openarmx_bimanual_moveit_config/config/kinematics.yaml) 양팔(`left_arm`/`right_arm`) `kdl_kinematics_plugin/KDLKinematicsPlugin → lma_kinematics_plugin/LMAKinematicsPlugin`, `kinematics_solver_timeout 0.005 → 0.05` (10배).
+- 효과: LMA(Levenberg-Marquardt)는 KDL 대비 일부 자세에서 수렴이 안정적 + timeout 10배 확대로 IK 실패율 감소.
+
+---

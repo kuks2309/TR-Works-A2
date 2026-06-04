@@ -34,6 +34,10 @@ HW_LAUNCH_CMD = [
     "right_can_interface:=can0",
     "left_can_interface:=can1",
     "can_fd:=false",
+    # The scenario_player workflow launch (_scenario_workflow_cmd) already owns
+    # the RViz instance (openarmx_scenario.rviz). Without this, HW bringup also
+    # spawns its own RViz (bimanual.rviz) → two RViz windows on a2-scenario.
+    "start_rviz:=false",
 ]
 PLAYER_RUN_CMD = ["ros2", "run", "openarmx_scenario_player", "scenario_player_node.py"]
 
