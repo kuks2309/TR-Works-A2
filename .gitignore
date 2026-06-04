@@ -29,6 +29,9 @@ Yolo/Yolov8/yolov8_env/
 # ---- D435 capture datasets (image data, not source) ----
 openarmx_ws/src/Sensor/RGBD/captures/
 
+# ---- AI training workspace (large weights / dataset / HEF / HAR; keep out of git) ----
+AI/
+
 # ---- OS ----
 .DS_Store
 Thumbs.db

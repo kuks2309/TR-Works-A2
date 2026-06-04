@@ -3,8 +3,9 @@
 
 On an ``AlignToBoxes`` goal it:
   1. detecting  -- triggers the on-demand YOLOv8 ``DetectBox`` action over several
-     frames, accumulates + clusters the detections in 3D, and computes each box's
-     TOP-surface centroid in the robot base frame (publishes box_<i> TFs).
+     frames, projects each detection's SEGMENTATION-MASK centroid (centroid_px) to
+     3D via the aligned depth, clusters the points, and computes each box's centroid
+     in the robot base frame (publishes box_<i> TFs).
   2. assigning  -- sorts boxes left->right by base-frame Y and assigns +Y boxes to
      the LEFT arm, -Y boxes to the RIGHT arm (honouring goal.arms).
   3. moving     -- for each assigned arm, builds a link7 target at (box.x, box.y, z)
@@ -168,26 +169,28 @@ class BoxAlignNode(Node):
                 kept.append(d)
         return kept
 
-    def _point3d(self, bbox):
-        """Box-top surface centroid (nearest-depth cluster in bbox), camera frame."""
+    def _point3d_at(self, u, v, win=5):
+        """Project the 2D image point (u, v) -- the segmentation-mask centroid -- to a
+        3D point in the camera frame, using the aligned depth + intrinsics. A small
+        window around (u, v) is sampled and the nearest-surface (box-top) median depth
+        is used, so the point is robust to single-pixel depth holes and sits on the box."""
         if self.depth is None or self.fx is None:
             return None
-        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
         H, W = self.depth.shape[:2]
-        x1, y1, x2, y2 = max(0, x1), max(0, y1), min(W, x2), min(H, y2)
-        roi = self.depth[y1:y2, x1:x2].astype(float) / 1000.0
-        vv, uu = np.where(roi > 0)
-        if uu.size < 20:
+        ui, vi = int(round(u)), int(round(v))
+        if not (0 <= ui < W and 0 <= vi < H):
             return None
-        zz = roi[vv, uu]
-        z_near = np.percentile(zz, 5)
-        top = zz < (z_near + 0.03)
-        if top.sum() < 10:
-            top = zz <= np.percentile(zz, 30)
-        u, v, z = uu[top] + x1, vv[top] + y1, zz[top]
+        x1, y1 = max(0, ui - win), max(0, vi - win)
+        x2, y2 = min(W, ui + win + 1), min(H, vi + win + 1)
+        vals = (self.depth[y1:y2, x1:x2].astype(float) / 1000.0).ravel()
+        vals = vals[vals > 0]
+        if vals.size < 5:
+            return None
+        near = vals[vals < np.percentile(vals, 5) + 0.03]   # nearest surface = box top
+        z = float(np.median(near)) if near.size else float(np.median(vals))
         X = (u - self.cx) * z / self.fx
         Y = (v - self.cy) * z / self.fy
-        return [float(np.mean(X)), float(np.mean(Y)), float(np.mean(z))]
+        return [float(X), float(Y), z]
 
     def _cam_to_base(self, p):
         tf = self._tf(BASE, CAM)
@@ -210,7 +213,12 @@ class BoxAlignNode(Node):
         for _ in range(self.n_frames):
             for d in self._dedup([x for x in self._detect_once(prompts, conf)
                                   if x["confidence"] > 0.005]):
-                p = self._point3d(d["bbox_xyxy"])
+                cen = d.get("centroid_px")
+                if cen and len(cen) == 2:                  # 2D seg-mask centroid -> 3D
+                    p = self._point3d_at(cen[0], cen[1])
+                else:                                      # backend w/o seg -> bbox centre px
+                    x1, y1, x2, y2 = d["bbox_xyxy"]
+                    p = self._point3d_at(0.5 * (x1 + x2), 0.5 * (y1 + y2))
                 if p:
                     raw.append(p)
         clusters = []

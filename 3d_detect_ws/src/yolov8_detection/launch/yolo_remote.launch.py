@@ -3,6 +3,11 @@
 Assumes realsense2_camera is already running on this PC. The node forwards one
 color frame per DetectBox goal to `server_url`, receives 2D detections, and
 publishes the canonical detection JSON on ~/detections (box_plane compatible).
+
+Drop-in for the pick_and_place stack: launch with node_name:=yolov8_node so the
+action/topics land at /yolov8_node/detect and /yolov8_node/detections — exactly
+what box_align_node / box_plane_node already consume (no changes to them):
+    ros2 launch yolov8_detection yolo_remote.launch.py node_name:=yolov8_node
 """
 
 from launch import LaunchDescription
@@ -17,6 +22,10 @@ def generate_launch_description() -> LaunchDescription:
     config_path = PathJoinSubstitution([pkg_share, "config", "yolo_remote.yaml"])
 
     args = [
+        DeclareLaunchArgument(
+            "node_name", default_value="yolo_remote_node",
+            description="Node name. Set to 'yolov8_node' to drop in for the pick_and_place "
+                        "stack (action -> /yolov8_node/detect, topic -> /yolov8_node/detections)."),
         DeclareLaunchArgument("server_url", default_value="http://10.42.0.2:8080/detect"),
         DeclareLaunchArgument("use_depth", default_value="false"),
         DeclareLaunchArgument("image_topic",
@@ -30,7 +39,7 @@ def generate_launch_description() -> LaunchDescription:
     yolo_remote_node = Node(
         package="yolov8_detection",
         executable="yolo_remote_node",
-        name="yolo_remote_node",
+        name=LaunchConfiguration("node_name"),
         output="screen",
         parameters=[
             config_path,

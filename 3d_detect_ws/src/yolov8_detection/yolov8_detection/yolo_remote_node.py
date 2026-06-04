@@ -214,7 +214,17 @@ class YoloRemoteNode(Node):
                 "bbox_xyxy": [x1, y1, x2, y2],
                 "bbox_center_px": [cx_px, cy_px],
             }
-            point_3d = self._project_to_3d(cx_px, cy_px, depth_img)
+            # Segmentation backend supplies the mask centre of mass; use it as the
+            # 3D pick point when present, otherwise the bbox centre.
+            centroid = d.get("centroid_px")
+            if isinstance(centroid, (list, tuple)) and len(centroid) == 2:
+                px, py = float(centroid[0]), float(centroid[1])
+                det["centroid_px"] = [px, py]
+            else:
+                px, py = cx_px, cy_px
+            if "mask_area_px" in d:
+                det["mask_area_px"] = int(d["mask_area_px"])
+            point_3d = self._project_to_3d(px, py, depth_img)
             if point_3d is not None:
                 det["point_camera"] = point_3d
             detections.append(det)

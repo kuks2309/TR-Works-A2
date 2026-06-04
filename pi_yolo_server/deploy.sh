@@ -3,8 +3,8 @@
 # Usage: ./deploy.sh [user@host] [dest_dir]
 set -euo pipefail
 
-TARGET="${1:-pi@10.42.0.2}"
-DEST="${2:-~/pi_yolo_server}"
+TARGET="${1:-argoon@10.42.0.2}"
+DEST="${2:-~/AI/TR-Works}"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/"
 
 # --exclude the venv and large model weights from the code sync; copy the .hef

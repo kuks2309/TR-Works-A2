@@ -1,4 +1,7 @@
-# One class name per line, in the SAME order as your custom YOLOv8s training
-# (line 0 = class_id 0). Replace with your real classes. Blank lines / lines
-# starting with '#' are ignored.
-box
+# mini-box YOLOv8-seg classes, in training order (line N = class_id N).
+# Source: AI/mini-box-segment/dataset/data.yaml
+mini-box-blue
+mini-box-green
+mini-box-orange
+mini-box-red
+mini-box-yellow

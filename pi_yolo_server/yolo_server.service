@@ -5,16 +5,17 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/pi_yolo_server
+User=argoon
+WorkingDirectory=/home/argoon/AI/TR-Works
 # Point HEF_PATH at your compiled model; LABELS_PATH at your class list.
-Environment=HEF_PATH=/home/pi/pi_yolo_server/yolov8s.hef
-Environment=LABELS_PATH=/home/pi/pi_yolo_server/labels.txt
+Environment=TASK=seg
+Environment=HEF_PATH=/home/argoon/AI/TR-Works/yolov8s_seg_minibox.hef
+Environment=LABELS_PATH=/home/argoon/AI/TR-Works/labels.txt
 Environment=OUTPUT_FORMAT=nms
 Environment=HOST=0.0.0.0
 Environment=PORT=8080
-# Use the venv interpreter if you created one (see README); otherwise python3.
-ExecStart=/home/pi/pi_yolo_server/.venv/bin/python server.py
+# System python3 already provides flask/numpy/opencv + hailo_platform (HailoRT 4.20.0).
+ExecStart=/usr/bin/python3 server.py
 Restart=on-failure
 RestartSec=3
 

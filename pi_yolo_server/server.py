@@ -5,8 +5,11 @@ Endpoints
 POST /detect            body = raw JPEG bytes, query: ?conf=<f>&iou=<f>
     -> {"model": str, "infer_ms": float, "image_size": [H, W],
         "detections": [{"class_id": int, "class_name": str,
-                        "confidence": float, "bbox_xyxy": [x1,y1,x2,y2]}]}
-    bbox_xyxy is in ORIGINAL image pixel coordinates.
+                        "confidence": float, "bbox_xyxy": [x1,y1,x2,y2],
+                        # seg task (TASK=seg) additionally returns:
+                        "centroid_px": [cx,cy], "mask_area_px": int}]}
+    All coordinates are in ORIGINAL (posted) image pixels. centroid_px is the
+    segmentation mask's centre of mass (the robot PC back-projects it to 3D).
 GET  /health            -> {"status": "ok", "mock": bool, "model": str}
 
 The robot PC's ROS2 yolo_remote_node posts one color frame per DetectBox goal
@@ -33,28 +36,32 @@ import cv2
 import numpy as np
 from flask import Flask, jsonify, request
 
-from hailo_infer import HailoYoloV8, load_labels
+from hailo_infer import load_labels
 
-HEF_PATH = os.environ.get("HEF_PATH", "yolov8s.hef")
+TASK = os.environ.get("TASK", "seg")            # "seg" (mask+centroid) or "detect" (bbox)
+HEF_PATH = os.environ.get("HEF_PATH", "yolov8s_seg_minibox.hef")
 LABELS_PATH = os.environ.get("LABELS_PATH", "labels.txt")
 INPUT_SIZE = int(os.environ.get("INPUT_SIZE", "640"))
-CONF = float(os.environ.get("CONF", "0.35"))
-IOU = float(os.environ.get("IOU", "0.5"))
-OUTPUT_FORMAT = os.environ.get("OUTPUT_FORMAT", "nms")
+CONF = float(os.environ.get("CONF", "0.25"))
+IOU = float(os.environ.get("IOU", "0.45"))
+OUTPUT_FORMAT = os.environ.get("OUTPUT_FORMAT", "nms")  # detect task only
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8080"))
 
 app = Flask(__name__)
 
 _labels = load_labels(LABELS_PATH)
-_detector = HailoYoloV8(
-    hef_path=HEF_PATH,
-    labels=_labels,
-    input_size=INPUT_SIZE,
-    conf=CONF,
-    iou=IOU,
-    output_format=OUTPUT_FORMAT,
-)
+if TASK == "seg":
+    from hailo_seg import HailoYoloSeg
+    _detector = HailoYoloSeg(
+        hef_path=HEF_PATH, labels=_labels, input_size=INPUT_SIZE, conf=CONF, iou=IOU,
+    )
+else:
+    from hailo_infer import HailoYoloV8
+    _detector = HailoYoloV8(
+        hef_path=HEF_PATH, labels=_labels, input_size=INPUT_SIZE,
+        conf=CONF, iou=IOU, output_format=OUTPUT_FORMAT,
+    )
 # The Hailo VDevice is single-access; serialize inference across requests.
 _infer_lock = threading.Lock()
 
@@ -63,6 +70,7 @@ _infer_lock = threading.Lock()
 def health():
     return jsonify({
         "status": "ok",
+        "task": TASK,
         "mock": _detector.mock,
         "model": os.path.basename(HEF_PATH),
         "num_labels": len(_labels),
@@ -85,10 +93,14 @@ def detect():
     except (TypeError, ValueError):
         conf = CONF
 
+    want_masks = request.args.get("masks", "0").lower() in ("1", "true", "yes")
     h, w = bgr.shape[:2]
     t0 = time.monotonic()
     with _infer_lock:
-        detections = _detector.infer(bgr, conf=conf)
+        if TASK == "seg":
+            detections = _detector.infer(bgr, conf=conf, return_polygon=want_masks)
+        else:
+            detections = _detector.infer(bgr, conf=conf)
     infer_ms = (time.monotonic() - t0) * 1e3
 
     return jsonify({
