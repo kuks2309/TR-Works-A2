@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-06-05 07:02 KST — 약어 검사 Stop 훅 + 잔여 변경 커밋/푸쉬 + kuks_claude_setup 업로드
+
+> "기록.. 깃 허브 커밋 푸쉬 완료할 것"
+
+> "https://github.com/kuks2309/kuks_claude_setup/tree/feat/code-review-sop 에 방금 만든 hook을 upload 할 것"
+
+> "...는 추가 요청임 기존 china는 계속 진행"
+
+> "이것도 커밋 푸쉬해주세요."
+
+> "기록후 세션 종료하려고 함"
+
+---
+
 ## 2026-06-05 02:09 KST — pilz pick&place 실기검증(IK KDL→LMA) + Pick&Place UI 탭/D435 통합
 
 > "cyclo_robot_controller/... MoveJ/MoveL 컨트롤러 수정 5건  진행"
