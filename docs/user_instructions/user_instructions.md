@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-06-05 02:09 KST — pilz pick&place 실기검증(IK KDL→LMA) + Pick&Place UI 탭/D435 통합
+
+> "cyclo_robot_controller/... MoveJ/MoveL 컨트롤러 수정 5건  진행"
+
+> "ds435 카메라를 작동해서 박스를 감지해서이동을 하려고 합니다. /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/pick_and_place/pilz 검증 현재 실행되고 있는 노드를 확인하고 필요한 노드를 실행해서 작동 여부를 검증해봅시다."
+
+> "현재 스텍 sim"
+
+> "pilz는 MoveIt move_group(Pilz)  실행했음"
+
+> "직접 구동해주세요. 제발 기록 검토"
+
+> "제발 기록을 보세요. 성공한 기록을 찾아서...cyclo pick and place  성공 기록 제발 검토"
+
+> "vla 는 나중에 하고 현재 설치 한 것으로 가지고 역기구학을 풀어봅시다."
+
+> "sudo apt install ros-humble-pick-ik 완료"
+
+> "roll 180 pitch  0 yaw 0 도 유지해야 하느데 왜?"
+
+> "박스 위치를 정확히 인식 못한 것 같은데"
+
+> "이미지 분석 안하는지"
+
+> "에 pick and place 탭 만들어주세요. 여기에서 앞으로 구동해서 통합하려고 합니다."
+
+> "ui 시작 명령어 alias 에 만들어 주세요 a2-scenario??? 어떤 폴더에서도 구동되게.. source 명령어 포함"
+
+> "rviz가 2개가 실행되는데.."
+
+> "openarmx_scenario.rviz 만 실행해야 함"
+
+> "조건없이 띄워야 함..  launch manager에서는 추가로 실행 중단할수 있도록 해야 함"
+
+> "센서 구동 노드 ds435 실행 중단 구현 부탁 이 탭에 구현 부탁"
+
+> "세션 종료 준비 기록 커밋 푸쉬"
+
+---
+
 ## 2026-06-03 16:18 KST — openarmx_pick 분석·문서화 + pick_and_place/cyclo/로 이동
 
 > "폴더 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_pick 에 대해서 분석하고 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/openarmx_pick/docs 에 기록 팀 20명 최대 투입.."
