@@ -24,7 +24,8 @@ import rclpy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Pose, PoseArray
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                       ReliabilityPolicy, qos_profile_sensor_data)
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import ColorRGBA, String
@@ -80,7 +81,13 @@ class BoxPerceptionNode(Node):
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.pub_poses = self.create_publisher(PoseArray, "/detected_boxes", 10)
+        # latched(transient_local): /detected_boxes 는 검출 1회당 1개 발행이라,
+        # 늦게 구독한 모션 백엔드도 최신 1개를 받도록 한다.
+        self.pub_poses = self.create_publisher(
+            PoseArray, "/detected_boxes",
+            QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                       reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.pub_markers = self.create_publisher(MarkerArray, "/detected_boxes_markers", 10)
 
         self.create_subscription(Image, str(gp("depth_topic").value),

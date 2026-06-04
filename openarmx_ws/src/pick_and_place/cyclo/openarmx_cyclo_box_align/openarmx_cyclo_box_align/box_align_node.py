@@ -25,6 +25,7 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformListener
 
@@ -60,7 +61,7 @@ class BoxAlignNode(Node):
         super().__init__("box_align_node")
         self.declare_parameter("move_time", 6.0)
         self.declare_parameter("detected_boxes_topic", "/detected_boxes")
-        self.declare_parameter("max_box_age", 10.0)
+        self.declare_parameter("max_box_age", 60.0)
         gp = self.get_parameter
         self.move_time = float(gp("move_time").value)
         self.max_age = float(gp("max_box_age").value)
@@ -70,9 +71,14 @@ class BoxAlignNode(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self._boxes = None        # latest /detected_boxes poses (base frame)
         self._boxes_t = None      # rclpy Time when received
+        # latched(transient_local): /detected_boxes 는 검출 1회당 1개 발행이라,
+        # 이 백엔드가 늦게 떠도 최신 1개를 받도록 한다(발행측과 QoS 일치 필수).
         self.create_subscription(
-            PoseArray, str(gp("detected_boxes_topic").value),
-            self._on_boxes, 10, callback_group=cb)
+            PoseArray, str(gp("detected_boxes_topic").value), self._on_boxes,
+            QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                       reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            callback_group=cb)
         self.movel_pub = {
             "left": self.create_publisher(MoveL, "/openarmx/left/movel", 10),
             "right": self.create_publisher(MoveL, "/openarmx/right/movel", 10),
