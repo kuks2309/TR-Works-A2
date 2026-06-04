@@ -161,6 +161,26 @@ class YoloRemoteNode(Node):
             raw = resp.read()
         return json.loads(raw.decode("utf-8"))
 
+    def _decode_color(self, msg: Image) -> np.ndarray:
+        """Decode a color Image msg to BGR with numpy directly.
+
+        cv_bridge.imgmsg_to_cv2(..., 'bgr8') is broken in this environment
+        (numpy 2.x + system OpenCV 4.5.4 skew -> cvtColor '!_src.empty()'), so we
+        unpack the buffer ourselves. Depth still uses cv_bridge passthrough (no
+        colour conversion, unaffected)."""
+        enc = (msg.encoding or "").lower()
+        buf = np.frombuffer(msg.data, dtype=np.uint8)
+        if enc in ("rgb8", "bgr8"):
+            img = buf.reshape(msg.height, msg.width, 3)
+            return cv2.cvtColor(img, cv2.COLOR_RGB2BGR) if enc == "rgb8" else img
+        if enc == "mono8":
+            return cv2.cvtColor(buf.reshape(msg.height, msg.width), cv2.COLOR_GRAY2BGR)
+        if enc in ("rgba8", "bgra8"):
+            img = buf.reshape(msg.height, msg.width, 4)
+            code = cv2.COLOR_RGBA2BGR if enc == "rgba8" else cv2.COLOR_BGRA2BGR
+            return cv2.cvtColor(img, code)
+        raise ValueError(f"unsupported color encoding: {msg.encoding}")
+
     def _project_to_3d(
         self, u: float, v: float, depth_img: Optional[np.ndarray]
     ) -> Optional[List[float]]:
@@ -300,10 +320,10 @@ class YoloRemoteNode(Node):
             # Decode color once: needed both to JPEG-encode for the server and to
             # draw the annotated preview locally.
             try:
-                cv_bgr = self._bridge.imgmsg_to_cv2(color, desired_encoding="bgr8")
+                cv_bgr = self._decode_color(color)
             except Exception as exc:  # noqa: BLE001
                 goal_handle.abort()
-                result.message = f"cv_bridge color decode failed: {exc}"
+                result.message = f"color decode failed: {exc}"
                 self.get_logger().error(result.message)
                 return result
 
