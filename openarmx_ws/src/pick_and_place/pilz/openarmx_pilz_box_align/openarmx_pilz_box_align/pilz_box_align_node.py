@@ -24,7 +24,7 @@ import time
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
-from geometry_msgs.msg import Pose, Quaternion, TransformStamped, Vector3
+from geometry_msgs.msg import Pose, Quaternion, Vector3
 from moveit_msgs.msg import (BoundingVolume, Constraints, OrientationConstraint,
                              PositionConstraint, RobotState)
 from moveit_msgs.srv import GetMotionPlan
@@ -36,7 +36,7 @@ from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 from shape_msgs.msg import SolidPrimitive
-from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
+from tf2_ros import Buffer, TransformListener
 from trajectory_msgs.msg import JointTrajectory
 
 from yolov8_detection_msgs.action import DetectBox
@@ -109,8 +109,6 @@ class PilzBoxAlignNode(Node):
         self.create_subscription(
             CameraInfo, "/camera/camera/color/camera_info",
             self._on_ci, 10, callback_group=cb)
-        self.br = StaticTransformBroadcaster(self)
-        self._max_box = 0
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.jtc_pub = {
@@ -205,13 +203,6 @@ class PilzBoxAlignNode(Node):
         R = quat_to_R([q.x, q.y, q.z, q.w])
         return (R @ np.array(p) + np.array([t.x, t.y, t.z])).tolist()
 
-    def _base_align_quat(self):
-        tf = self._tf(CAM, BASE)
-        if tf is None:
-            return [0.0, 0.0, 0.0, 1.0]
-        r = tf.rotation
-        return [r.x, r.y, r.z, r.w]
-
     def detect_boxes(self, prompts, conf):
         raw = []
         for _ in range(self.n_frames):
@@ -242,30 +233,6 @@ class PilzBoxAlignNode(Node):
                 boxes.append({"cam": cl["mean"], "base": b, "hits": len(cl["pts"])})
         boxes.sort(key=lambda d: -d["base"][1])
         return boxes
-
-    def publish_box_tfs(self, boxes):
-        q = self._base_align_quat()
-        tfs = []
-        for i, b in enumerate(boxes):
-            t = TransformStamped()
-            t.header.stamp = self.get_clock().now().to_msg()
-            t.header.frame_id = CAM
-            t.child_frame_id = f"box_{i}"
-            c = b["cam"]
-            t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = map(float, c)
-            t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z, t.transform.rotation.w = map(float, q)
-            tfs.append(t)
-        for i in range(len(boxes), self._max_box):
-            t = TransformStamped()
-            t.header.stamp = self.get_clock().now().to_msg()
-            t.header.frame_id = CAM
-            t.child_frame_id = f"box_{i}"
-            t.transform.translation.z = -100.0
-            t.transform.rotation.w = 1.0
-            tfs.append(t)
-        self._max_box = max(self._max_box, len(boxes))
-        if tfs:
-            self.br.sendTransform(tfs)
 
     # ------------------------------------------------------------- Pilz move
     @staticmethod
@@ -356,7 +323,8 @@ class PilzBoxAlignNode(Node):
 
         self._fb(gh, "detecting", 0.1)
         boxes = self.detect_boxes(prompts, conf)
-        self.publish_box_tfs(boxes)
+        # box TF/마커는 인지 노드(box_perception_node)가 발행 — 모션 백엔드는
+        # box TF 를 발행하지 않는다(인지/모션 분리). 검출 결과는 모션 타깃에만 사용.
         res.detections_json = json.dumps([{"base": b["base"], "hits": b["hits"]} for b in boxes])
         if not boxes:
             gh.abort()

@@ -1,0 +1,15 @@
+# D435 센서 스트림 QoS — SENSOR_DATA (= BEST_EFFORT, KEEP_LAST, depth 5).
+#
+# realsense2_camera 기본값 DEFAULT 는 RELIABLE 로 매핑되어, 고속 포인트클라우드
+# (~146k점/frame, ~27.6 MB/s)와 depth/color 스트림에 DDS 재전송·버퍼 오버헤드를
+# 유발한다. ROS2 센서 데이터 관례(best_effort)에 맞춰 정렬하면 소비자(RViz
+# PointCloud2/Image = best_effort, box_align = sensor_data)와 동일 정책이 되고
+# 불필요한 신뢰성 오버헤드가 사라진다.
+#
+# rs_launch.py 의 config_file 메커니즘(parameters=[params, params_from_file])으로
+# 노드에 flat 파라미터로 직접 주입된다. 키는 노드 파라미터명과 동일해야 한다
+# (ros2 param list /camera/camera 로 확인: color_qos / depth_qos /
+# pointcloud.pointcloud_qos).
+pointcloud.pointcloud_qos: SENSOR_DATA
+depth_qos: SENSOR_DATA
+color_qos: SENSOR_DATA

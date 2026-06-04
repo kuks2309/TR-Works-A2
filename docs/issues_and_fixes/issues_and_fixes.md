@@ -7,6 +7,136 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-05 01:25 (KST) — 인지/모션 분리: box_perception_node 신설(검출→3D 좌표+마커), 모션 백엔드 box TF 발행 제거
+
+### 증상 / 배경
+- "검출(원격 seg)"만으로는 RViz 에 박스 위치가 안 떴음. box TF 는 모션 백엔드(pilz/cyclo box_align)가 AlignToBoxes(모션) **액션 안에서만** 발행 → 모션을 돌려야만 박스가 보이는 구조(인지·모션 결합).
+- 사용자 요구: **인지(검출+위치)와 모션을 명확히 분리**. 박스 3D 위치는 검출 시점에 YOLOv8 결과와 함께 나와야 하고(정석), 모션은 그 뒤. 또한 TF 프레임보다 **3D 좌표 토픽 + 마커**가 검출 객체 표현의 표준.
+
+### 수정
+- **신규 인지 노드** [box_perception_node.py](../../3d_detect_ws/src/yolov8_detection/yolov8_detection/box_perception_node.py) — `/yolov8_node/detections`(2D) + depth + camera_info + TF(camera→base, 내부 계산용) → 3D box 좌표 → `/detected_boxes`(PoseArray, base) + `/detected_boxes_markers`(MarkerArray, 클래스 색/텍스트 라벨). 워크스페이스 필터로 상단 슬리버 제거. **box TF 는 발행하지 않음**(좌표 토픽+마커가 표준, 모션은 PoseArray 만 구독하면 TF lookup 없이 이동 가능).
+- [yolo_remote.launch.py](../../3d_detect_ws/src/yolov8_detection/launch/yolo_remote.launch.py)에 통합 → "원격검출 브리지(Pi) Start" 시 동반 기동. setup.py 엔트리 추가.
+- [pilz_box_align_node.py](../../openarmx_ws/src/pick_and_place/pilz/openarmx_pilz_box_align/openarmx_pilz_box_align/pilz_box_align_node.py): `publish_box_tfs` 및 관련 import/메서드 제거(인지로 이관, 이중발행 해소).
+- [openarmx_scenario.rviz](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/config/openarmx_scenario.rviz): MarkerArray "Detected Boxes"(`/detected_boxes_markers`) 디스플레이 추가.
+- PnP 탭([pick_and_place_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/pick_and_place_tab.py)): 검출 버튼 라벨 "원격검출 브리지(Pi)" 로 명확화, "검출요청(1회)" 버튼(모션 없이 검출 검증), "로그 지우기" 버튼, confidence 기본 0.5.
+- 빌드 exit 0. **라이브 검증**: 검출요청 → RViz 에 클래스별 색 박스 마커 + 라벨이 3D 위치에 표시 확인.
+
+### 재발 방지 / 후속
+- 인지(검출+box 좌표/마커)와 모션은 분리 유지 — box TF/마커 발행은 인지(box_perception_node) 책임.
+- 후속(③): 모션 백엔드가 `/detected_boxes`(PoseArray)를 consume 하여 타깃 결정(자체 검출 제거) = 완전 분리. cyclo box_align 도 box TF 제거 동일 적용 필요.
+
+---
+
+## 2026-06-05 00:33 (KST) — a2-scenario 종료 시 카메라/TF 브리지 잔존: pnp shutdown + SIGINT graceful 정리
+
+### 증상
+a2-scenario 종료(창 X 닫기 또는 터미널 Ctrl+C) 후 `/camera/camera`, `/d435_center_to_camera_link_tf`(및 검출/정렬 노드)가 종료되지 않고 잔존.
+
+### 원인
+1. [pick_and_place_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/pick_and_place_tab.py) `shutdown()`이 카메라/검출/백엔드 ManagedProcess 를 **의도적으로 종료하지 않음**(UI 재시작 간 prereq 유지 설계). closeEvent 가 돌아도 카메라가 살아남음.
+2. [scenario_ui.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/scripts/scenario_ui.py) 의 `signal.SIGINT = SIG_DFL` → 터미널 Ctrl+C 시 즉시 종료되어 `closeEvent`(정리) 자체가 미실행. ManagedProcess 는 `start_new_session`(detached)이라 부모 사망에도 생존.
+
+### 수정
+1. `pick_and_place_tab.py` `shutdown()` 에서 `_cam_proc/_det_proc/_backend_proc.stop()`(killpg) 호출 추가 → 창 닫기 시 정리.
+2. `scenario_ui.py` `SIGINT` 를 graceful 핸들러(`win.close()` + `app.quit()`)로 교체 + Qt 이벤트루프가 시그널 처리하도록 `QTimer(200ms)` 추가 → 터미널 Ctrl+C 도 `closeEvent` 경유 정리.
+- py_compile OK, 빌드 exit 0. 창 닫기/Ctrl+C 양쪽 모두 카메라+브리지+검출/정렬 종료.
+
+### 재발 방지
+- UI 가 띄운 prereq(카메라/검출/백엔드)는 UI 종료 시 함께 종료가 기본. 기존 잔존 노드는 [[kill_all_ros2_canonical]] `kill_all_ros2.sh` 로 정리 후 재기동.
+
+---
+
+## 2026-06-05 00:30 (KST) — RViz fps 30→10 저하 (포인트클라우드 발행 시): 5-에이전트 진단, PointCloud2 렌더 부하 확정
+
+### 증상
+카메라 포인트클라우드 발행 또는 RViz 'RGBD Cloud'(PointCloud2) 디스플레이 체크 시 RViz fps 가 30→10 으로 저하.
+
+### 원인 (5-에이전트 병렬 진단, 가설 2개 측정 기각)
+- **주원인**: PointCloud2 'RGBD Cloud' 디스플레이의 대용량 점(~146k/frame, 2.93MB/msg, ~27.6MB/s, `Style=Flat Squares`=점당 빌보드 쿼드 ~6배 정점부하)이 RViz **단일 OGRE 렌더 스레드 포화**. 측정: `top -H` rviz2 메인 스레드만 60~80%, 나머지 40스레드 ≤6.7%.
+- **증폭기**: 시스템 CPU 포화 — load avg ~11(8코어), run-queue 17, realsense 96% + scenario_ui 85% + anydesk/rustdesk 동시.
+- **기각**: 소프트웨어 렌더(iris_dri HW가속 확인·swrast 0건), TF 부하(카메라 TF 전량 static/latched, RViz TF 스레드 6.7%).
+- 사용자 차분 테스트('RGBD Cloud' 체크→10fps 재현)로 주원인 확정. 이후 **10→15fps 부분 개선** 관측(원인 미확정 — QoS BEST_EFFORT 적용/부하 프로세스 감소 추정).
+
+### 수정
+권장안 제시, **사용자 승인 대기로 미적용**. 권장(RViz 표시 전용 · 검출 파이프라인 무영향):
+`openarmx_scenario_player/config/openarmx_scenario.rviz` — line249 `Style` Flat Squares→Points, line246 `Selectable`→false, line247 `Size(Pixels)` 3→2. (`decimation_filter` 는 검출 depth 에도 영향이라 제외.)
+
+### 재발 방지
+- 약한 iGPU + 단일 PC 에 realsense+RViz+UI+원격데스크톱 집중 회피. 대용량 클라우드는 Points 스타일/다운샘플/RViz 분리.
+- 1분 차분 테스트(디스플레이 체크 토글)로 렌더 부하 여부 즉시 판별.
+
+---
+
+## 2026-06-05 00:25 (KST) — D435 센서 QoS RELIABLE→BEST_EFFORT(SENSOR_DATA) 정렬
+
+### 증상
+진단 중 "QoS 불일치"로 보고됨. 그러나 라이브 확인 결과 **연결을 끊는 불일치는 없음** — 퍼블리셔(클라우드)가 RELIABLE 이고 RELIABLE 은 모든 구독과 호환(클라우드 정상 렌더가 증거). 보고된 "RELIABLE 구독 0건"은 **CPU 포화로 인한 진단 CLI starvation 의 오인**(다른 에이전트의 exit 124/143 타임아웃과 동일 정황).
+
+### 원인
+realsense2_camera QoS 기본값 `DEFAULT` 가 RELIABLE/KEEP_LAST 로 매핑됨. 고속 센서 스트림(27.6MB/s 클라우드)엔 BEST_EFFORT(sensor_data)가 ROS2 관례 — RELIABLE 은 불필요한 재전송/버퍼 오버헤드.
+
+### 수정
+센서 스트림을 SENSOR_DATA(BEST_EFFORT)로 정렬:
+1. 새 파일 [d435_qos.yaml](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/config/d435_qos.yaml) — `pointcloud.pointcloud_qos / depth_qos / color_qos = SENSOR_DATA`.
+2. [d435_camera.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/d435_camera.launch.py) 가 rs_launch 의 `config_file` 메커니즘(`parameters=[params, params_from_file]`, rs_launch.py:159)으로 주입. rs_launch 가 qos 를 launch 인자로 미노출(`--show-args` 0건)하므로 config_file 경유.
+- `SENSOR_DATA` 는 realsense 라이브러리 유효 enum(strings 확인) + 런타임 set "successful". 빌드 exit 0. **적용은 카메라 재기동 후** (`ros2 topic info /camera/camera/depth/color/points -v` → `Reliability: BEST_EFFORT` 확인).
+
+### 재발 방지
+- 센서 스트림 QoS 는 BEST_EFFORT 기본. QoS '불일치' 의심 시 `ros2 topic info -v` 로 pub 의 offered QoS 를 먼저 확인 — CPU starvation 으로 인한 CLI 무수신을 QoS 불일치로 오인하지 말 것.
+
+---
+
+## 2026-06-05 00:05 (KST) — 카메라 Start 해도 RViz에 3D 포인트클라우드/박스 미표시: d435_center_link→camera_link TF 브리지 누락
+
+### 증상
+- Pick and Place 탭에서 "카메라 Start"(D435) 해도 RViz에 **3D 포인트클라우드가 안 보임**. 박스 검출 결과(box TF)도 안 보임.
+- depth/color/camera_info 토픽·포인트클라우드 토픽은 정상 발행(10Hz, 640×480), RViz config엔 PointCloud2 디스플레이도 존재.
+
+### 원인
+카메라 TF 체인 단절. 라이브 tf2_echo 세그먼트 검사:
+- `openarmx_body_link0 → d435_center_link` (정적 extrinsic, RSP) : **OK**
+- `d435_center_link → camera_link` (브리지) : **끊김** ← 근본 원인
+→ 카메라 서브트리가 base에서 끊겨 `/camera/camera` 클라우드/박스 TF가 RViz fixed frame(`openarmx_body_link0`)으로 해결되지 않음.
+이 브리지(static_transform_publisher `d435_center_to_camera_link_tf`)는 [scenario_player_with_ee_leader.launch.py:112-120](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/scenario_player_with_ee_leader.launch.py#L112-L120)에만 있었는데, a2-scenario는 [openarmx_scenario_workflow.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/openarmx_scenario_workflow.launch.py)(RViz + ee_leader 마커만)를 띄워 브리지가 안 떴고, 카메라 Start의 D435_CMD도 realsense만 띄우고 브리지를 포함하지 않았음.
+
+### 수정
+사용자 지시: "카메라 구동 시 실행되게, 기존 launch 재사용 말고 새로 만들어 사용".
+1. **새 launch** [d435_camera.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/d435_camera.launch.py) 생성 — realsense2_camera(컬러+깊이+depth→color 정렬+포인트클라우드) + `d435_center_link→camera_link` 정적 TF 브리지를 한 LaunchDescription으로.
+2. [pick_and_place_tab.py:62-67](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/pick_and_place_tab.py#L62-L67) `D435_CMD`를 `ros2 launch openarmx_scenario_player d435_camera.launch.py`로 교체. ManagedProcess가 `start_new_session`+`killpg`라 카메라 Stop 시 realsense·브리지가 한 프로세스그룹으로 함께 종료.
+3. 빌드(openarmx_scenario_player ament_cmake — 새 launch 설치 위해 필수 + openarmx_scenario_ui) exit 0, 설치·`--show-args` 파싱 검증 완료.
+- 체인 완성: `body_link0 →extrinsic→ d435_center_link →브리지→ camera_link →realsense→ *_optical_frame`.
+
+### 재발 방지
+- 카메라를 띄우는 경로는 항상 브리지를 포함한 전용 launch(`d435_camera.launch.py`) 사용. RViz fixed frame=`openarmx_body_link0` 기준 외부 `/camera/camera` 클라우드는 `d435_center_link→camera_link` 엣지가 전제.
+- 박스(box_0…) TF는 정렬 백엔드(box_align 노드)가 AlignToBoxes 액션 실행 중에만 브로드캐스트하는 on-demand 방식 → 박스를 RViz에서 보려면 정렬 백엔드 Start + Run AlignToBoxes 필요(클라우드 자체는 카메라 Start만으로 표시).
+
+---
+
+## 2026-06-04 23:45 (KST) — a2-scenario 시작 동작 정리: RViz 2중 spawn + Hardware/Player auto_start 자동실행 + tm_task_manager 유령 노드
+
+### 증상
+- `a2-scenario` (bashrc alias) 실행 시 **RViz 창이 2개** 뜸 — 제목줄 `openarmx_scenario.rviz` 하나 + `openarmx_description/.../bimanual.rviz` 하나.
+- 사용자가 누르지 않았는데 **Hardware Bringup / Scenario Player 가 자동으로 Running** (UI 상단 상태 패널).
+- `ros2 node list` 에 OpenArmX 와 무관한 `/tm_task_manager_node` 가 보임.
+
+### 원인
+1. **RViz 2중**: scenario_player workflow launch 가 `openarmx_scenario.rviz` 를 띄우고(의도된 단일 소유), HW bringup `openarmx.bimanual.launch.py` 의 `start_rviz` 기본값이 `true` 라 `bimanual.rviz` RViz 를 **추가로** 띄움. `HW_LAUNCH_CMD` 가 `start_rviz:=false` 를 전달하지 않음. 근거: [main_window.py:29-37](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py#L29-L37), [openarmx.bimanual.launch.py:267-273](../../openarmx_ws/src/openarmx_ros2/openarmx_bringup/launch/openarmx.bimanual.launch.py#L267-L273).
+2. **자동 실행**: `scenario_ui.launch.py` 가 노드를 인자 없이 실행 → `auto_start = not no_auto = True` → main_window 의 auto-start 시퀀스가 HW(+0.5s) / Player(+5s) / Refresh(+10s) 를 자동 Start. 근거: [scenario_ui.py:40](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/scripts/scenario_ui.py#L40), [main_window.py:177-179](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py#L177-L179).
+3. **유령 노드**: `/tm_task_manager_node` = Techman(TM) 협동로봇 드라이버 노드 (`tm_msgs`/`tm_driver`/`connect_tmsvr`/`techman_image`). 이 PC 에 패키지 미설치·프로세스 없음. `ROS_LOCALHOST_ONLY=0` + `ROS_DOMAIN_ID` 미설정(기본 0) 으로 동일 LAN(192.168.1.x) 의 다른 PC 노드가 한때 디스커버리됨 → ros2 CLI 데몬의 stale 그래프 캐시. 신선한 `--no-daemon` 스캔엔 없음, `ros2 daemon stop` 후 사라짐 → **a2-scenario 와 무관**.
+
+### 수정
+1. [main_window.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py) `HW_LAUNCH_CMD` 에 `start_rviz:=false` 추가 → RViz 는 scenario_player workflow 의 `openarmx_scenario.rviz` 1개만.
+2. [scenario_ui.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/launch/scenario_ui.launch.py) Node 에 `arguments=["--no-auto"]` 추가 → `a2-scenario` 는 UI + RViz 만 뜨고 Hardware Bringup / Scenario Player 는 **수동 Start** (사용자 지시 2026-06-04 "auto 실행 금지").
+3. (유령 노드) 코드 변경 없음 — `ros2 daemon stop` 으로 stale 캐시 정리.
+- `--symlink-install` 환경이라 두 수정 모두 **colcon 빌드 불필요·즉시 반영** (설치본 main_window.py / scenario_ui.launch.py 가 src 심볼릭 링크임을 확인).
+
+### 재발 방지
+- HW bringup 을 외부 launch 와 함께 띄울 땐 항상 `start_rviz:=false`. RViz 단일 소유 = scenario_player workflow (해당 launch arg description 에 이미 명시).
+- a2-scenario 자동 실행 정책: **금지** (UI + RViz 만). 자동 시작이 다시 필요해지면 `scenario_ui.launch.py` 의 `--no-auto` 를 제거.
+- 같은 네트워크에 타 로봇(Techman 등) 존재 시 `ROS_DOMAIN_ID` 격리 권장. 재기동은 `kill_all_ros2.sh` (FastDDS shm + 데몬 정리 포함) 사용.
+
+---
+
 ## 2026-06-04 — Camera 탭(D435+Pi YOLOv8 오버레이) 신설 + cv2/PyQt5 xcb 크래시 + Teaching 2테이블 컬럼 정렬 + 클라우드 TF 브리지
 
 ### 증상

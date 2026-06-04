@@ -58,11 +58,12 @@ MINIBOX_CLASSES = [
 ]
 
 # D435 카메라(RealSense) 기동 — 깊이 정렬 + 컬러 + 포인트클라우드(박스 검출용).
-# (TF d435_center_link->camera_link 브리지는 로봇/시나리오 스택이 제공한다.)
+# 전용 launch(d435_camera.launch.py)가 realsense 와 함께
+# d435_center_link->camera_link 정적 TF 브리지를 같은 프로세스그룹으로 띄운다.
+# 이 브리지가 있어야 /camera/camera 클라우드/박스 TF 가 openarmx_body_link0 으로
+# 풀려 RViz 에 렌더된다(카메라 Start 시 클라우드가 RViz 에 보이도록).
 D435_CMD = [
-    "ros2", "launch", "realsense2_camera", "rs_launch.py",
-    "enable_color:=true", "enable_depth:=true", "align_depth.enable:=true",
-    "pointcloud.enable:=true", "pointcloud.stream_filter:=2",
+    "ros2", "launch", "openarmx_scenario_player", "d435_camera.launch.py",
 ]
 
 # 원격 seg 검출 서버를 노드명 yolov8_node 로 기동(Pi Hailo seg 백엔드 드롭인) →
@@ -114,6 +115,11 @@ class PickAndPlaceTab(QWidget):
         self._proc.setProcessChannelMode(QProcess.MergedChannels)
         self._proc.readyReadStandardOutput.connect(self._on_output)
         self._proc.finished.connect(self._on_finished)
+        # 단계적 점검용 단발 DetectBox 요청(로봇 이동 없음) — 별도 QProcess.
+        self._detreq_proc = QProcess(self)
+        self._detreq_proc.setProcessChannelMode(QProcess.MergedChannels)
+        self._detreq_proc.readyReadStandardOutput.connect(self._on_detreq_output)
+        self._detreq_proc.finished.connect(self._on_detreq_finished)
         self._cam_proc = ManagedProcess("pnp_d435_camera")
         self._det_proc = ManagedProcess("pnp_remote_seg")
         self._backend_proc = ManagedProcess("pnp_box_align_backend")
@@ -168,9 +174,14 @@ class PickAndPlaceTab(QWidget):
         lgrid.setHorizontalSpacing(8)
         lgrid.setVerticalSpacing(6)
 
-        self._btn_det_start = QPushButton("검출(원격 seg) Start")
+        self._btn_det_start = QPushButton("원격검출 브리지(Pi) Start")
         self._btn_det_start.setStyleSheet(_BTN_RUN_QSS)
         self._btn_det_start.setMinimumHeight(30)
+        self._btn_det_start.setToolTip(
+            "라즈베리파이(Pi5+Hailo) 원격 검출 브리지 노드(yolov8_node) 기동/정지.\n"
+            "이 노드는 직접 검출하지 않는다 — /yolov8_node/detect 액션을 제공하고,\n"
+            "골이 오면 카메라 프레임 1장을 Pi 로 HTTP 중계해 YOLOv8-seg 결과를\n"
+            "받아온다(on-demand). 실제 추론은 Pi 에서 수행.")
         self._btn_det_start.clicked.connect(self._start_detect)
         self._btn_det_stop = QPushButton("Stop")
         self._btn_det_stop.setStyleSheet(_BTN_CANCEL_QSS)
@@ -178,9 +189,19 @@ class PickAndPlaceTab(QWidget):
         self._btn_det_stop.clicked.connect(self._stop_detect)
         self._lbl_det = QLabel("● Stopped")
         self._lbl_det.setStyleSheet("color:gray;")
+        # 단계적 점검: 검출 1회 요청(로봇 이동 없음). 브리지 옆에 배치.
+        self._btn_det_req = QPushButton("검출요청 (1회)")
+        self._btn_det_req.setStyleSheet(_BTN_RUN_QSS)
+        self._btn_det_req.setMinimumHeight(30)
+        self._btn_det_req.setToolTip(
+            "DetectBox 액션에 골 1개 전송(현재 confidence·클래스 필터 사용).\n"
+            "로봇 이동 없이 Pi 검출 결과만 아래 '결과/로그'에 표시 — 단계적 점검용.\n"
+            "전제: '원격검출 브리지(Pi) Start' 가 Running.")
+        self._btn_det_req.clicked.connect(self._request_detect)
         lgrid.addWidget(self._btn_det_start, 0, 0)
         lgrid.addWidget(self._btn_det_stop, 0, 1)
         lgrid.addWidget(self._lbl_det, 0, 2)
+        lgrid.addWidget(self._btn_det_req, 0, 3)
 
         self._btn_be_start = QPushButton("정렬 백엔드 Start")
         self._btn_be_start.setStyleSheet(_BTN_RUN_QSS)
@@ -195,7 +216,7 @@ class PickAndPlaceTab(QWidget):
         lgrid.addWidget(self._btn_be_start, 1, 0)
         lgrid.addWidget(self._btn_be_stop, 1, 1)
         lgrid.addWidget(self._lbl_be, 1, 2)
-        lgrid.setColumnStretch(3, 1)
+        lgrid.setColumnStretch(4, 1)
         root.addWidget(lgrp)
 
         # --- AlignToBoxes 골 파라미터 ------------------------------------
@@ -218,7 +239,7 @@ class PickAndPlaceTab(QWidget):
         self._roll = spin(-180.0, 180.0, 1.0, 180.0, 1, " °")  # 기본 수직하강
         self._pitch = spin(-180.0, 180.0, 1.0, 0.0, 1, " °")
         self._yaw = spin(-180.0, 180.0, 1.0, 0.0, 1, " °")
-        self._conf = spin(0.0, 1.0, 0.01, 0.01, 3)             # YOLO confidence
+        self._conf = spin(0.0, 1.0, 0.01, 0.50, 3)             # YOLO confidence (기본 0.5)
         self._vel = spin(0.0, 1.0, 0.05, 0.30, 2)              # pilz vel/acc scale
 
         self._arms = QComboBox()
@@ -283,6 +304,14 @@ class PickAndPlaceTab(QWidget):
         # --- 결과 / 로그 ------------------------------------------------
         rgrp = QGroupBox("결과 / 로그 (action feedback · result)")
         rlay = QVBoxLayout(rgrp)
+        rhdr = QHBoxLayout()
+        rhdr.addStretch()
+        self._btn_clear_log = QPushButton("로그 지우기")
+        self._btn_clear_log.setMinimumHeight(26)
+        self._btn_clear_log.setToolTip("결과/로그 내용을 지웁니다.")
+        self._btn_clear_log.clicked.connect(self._clear_log)
+        rhdr.addWidget(self._btn_clear_log)
+        rlay.addLayout(rhdr)
         self._log = QTextEdit()
         self._log.setReadOnly(True)
         self._log.setFont(QFont("monospace"))
@@ -339,6 +368,10 @@ class PickAndPlaceTab(QWidget):
     def _set_status(self, text: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
         self._lbl_status.setText(f"{ts}  {text}")
+
+    def _clear_log(self) -> None:
+        self._log.clear()
+        self._set_status("로그를 지웠습니다.")
 
     # --------------------------------------------------------------- actions
     def _run(self) -> None:
@@ -403,17 +436,49 @@ class PickAndPlaceTab(QWidget):
     # ------------------------------------------------- launch: detect/backend
     def _start_detect(self) -> None:
         if self._det_proc.running:
-            self._set_status("검출 서버: 이미 실행 중(이 탭).")
+            self._set_status("원격검출 브리지: 이미 실행 중(이 탭).")
             return
         if self._det_proc.start(DETECT_CMD):
             self._set_status(
-                f"원격 seg 검출 기동 → /yolov8_node/detect (로그 {self._det_proc.log_path})")
+                f"원격검출 브리지 기동 → /yolov8_node/detect (로그 {self._det_proc.log_path})")
         self._refresh_status()
 
     def _stop_detect(self) -> None:
         self._det_proc.stop()
-        self._set_status("검출 서버 종료.")
+        self._set_status("원격검출 브리지 종료.")
         self._refresh_status()
+
+    # ----- 단계적 점검: 단발 DetectBox 요청 (로봇 이동 없음) -----
+    def _detect_request_cmd(self) -> list:
+        # 현재 UI 의 confidence·클래스 필터를 그대로 사용. ros2 CLI 가
+        # yolov8_detection_msgs/action/DetectBox 타입을 인식하도록 3d_detect_ws 소싱.
+        goal = ("{prompts: '%s', confidence: %.3f, publish_annotated: true}"
+                % (self._selected_classes(), self._conf.value()))
+        inner = (f"source {_DETECT_WS_SETUP} && exec timeout 30 "
+                 f"ros2 action send_goal /yolov8_node/detect "
+                 f"yolov8_detection_msgs/action/DetectBox \"{goal}\"")
+        return ["bash", "-c", inner]
+
+    def _request_detect(self) -> None:
+        if not (self._det_proc.running or self._proc_running_external(EXT_DETECT)):
+            self._set_status("원격검출 브리지가 꺼져 있음 — 먼저 '원격검출 브리지(Pi) Start'.")
+            return
+        if self._detreq_proc.state() != QProcess.NotRunning:
+            self._set_status("검출요청 진행 중 — 잠시 후 다시.")
+            return
+        cmd = self._detect_request_cmd()
+        self._log.clear()
+        self._append(f"$ {cmd[-1]}\n")
+        self._set_status("검출요청 전송 중… (Pi 추론)")
+        self._detreq_proc.start(cmd[0], cmd[1:])
+
+    def _on_detreq_output(self) -> None:
+        text = bytes(self._detreq_proc.readAllStandardOutput()).decode(errors="replace")
+        if text:
+            self._append(text.rstrip("\n"))
+
+    def _on_detreq_finished(self, code, _status) -> None:
+        self._set_status(f"검출요청 종료 (exit {code}).")
 
     def _start_backend(self) -> None:
         if self._backend_proc.running:
@@ -472,5 +537,12 @@ class PickAndPlaceTab(QWidget):
         if self._proc.state() != QProcess.NotRunning:
             self._proc.kill()
             self._proc.waitForFinished(1500)
-        # 카메라/검출/백엔드 launch 프로세스는 의도적으로 종료하지 않음 — 전제 노드는
-        # UI 재시작 간 유지하고, 다음 UI 는 external 로 감지한다. 종료하려면 각 Stop 버튼 사용.
+        if self._detreq_proc.state() != QProcess.NotRunning:
+            self._detreq_proc.kill()
+            self._detreq_proc.waitForFinished(1500)
+        # UI 종료 시 이 탭이 띄운 카메라/검출/백엔드 launch 프로세스그룹도 함께 종료한다
+        # (a2-scenario 종료 후 /camera/camera, d435_center_to_camera_link_tf, yolov8_node,
+        # box_align 노드가 잔존하지 않도록). ManagedProcess.stop 이 killpg 로 그룹 전체 정리.
+        self._cam_proc.stop()
+        self._det_proc.stop()
+        self._backend_proc.stop()
