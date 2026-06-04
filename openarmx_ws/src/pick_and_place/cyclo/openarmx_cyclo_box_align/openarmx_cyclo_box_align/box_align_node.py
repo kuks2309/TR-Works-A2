@@ -29,7 +29,7 @@ from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalRespons
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
@@ -40,7 +40,15 @@ from openarmx_cyclo_box_align_msgs.action import AlignToBoxes
 
 BASE = "openarmx_body_link0"
 CAM = "camera_color_optical_frame"
-DEFAULT_PROMPTS = "box, cube, block, colored cube, toy block, cardboard box, square box"
+# realsense publishes aligned depth RELIABLE; a BEST_EFFORT sub receives it only
+# intermittently here, so match RELIABLE for stable depth reception.
+DEPTH_QOS = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
+                       history=QoSHistoryPolicy.KEEP_LAST, depth=5)
+# The remote seg model has FIXED classes (mini-box-blue/green/orange/red/yellow);
+# yolo_remote_node treats DetectBox `prompts` as a class-name allow-list filter.
+# Empty -> no filter (detect all 5 colours). A goal may pass specific
+# 'mini-box-<colour>' names (e.g. from the UI colour checkboxes) to restrict.
+DEFAULT_PROMPTS = ""
 
 
 def rpy_to_quat(roll, pitch, yaw):
@@ -100,7 +108,7 @@ class BoxAlignNode(Node):
         cb = ReentrantCallbackGroup()
         self.create_subscription(
             Image, "/camera/camera/aligned_depth_to_color/image_raw",
-            self._on_depth, qos_profile_sensor_data, callback_group=cb)
+            self._on_depth, DEPTH_QOS, callback_group=cb)
         self.create_subscription(
             CameraInfo, "/camera/camera/color/camera_info",
             self._on_ci, 10, callback_group=cb)
@@ -124,7 +132,14 @@ class BoxAlignNode(Node):
 
     # --------------------------------------------------------------- sensors
     def _on_depth(self, m):
-        self.depth = self.bridge.imgmsg_to_cv2(m, "passthrough")
+        try:
+            # numpy direct (cv_bridge broken under numpy 2.x); depth is 16UC1 mm.
+            self.depth = np.frombuffer(m.data, dtype=np.uint16).reshape(m.height, m.width)
+            if not getattr(self, "_depth_seen", False):
+                self._depth_seen = True
+                self.get_logger().warning(f"[detect] first depth {m.height}x{m.width} {m.encoding}")
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().error(f"depth decode failed: {e}")
 
     def _on_ci(self, m):
         if self.fx is None:
@@ -210,9 +225,12 @@ class BoxAlignNode(Node):
     def detect_boxes(self, prompts, conf):
         """Returns list of dicts {cam:[x,y,z], base:[x,y,z]} for each box."""
         raw = []
+        ndet = 0
         for _ in range(self.n_frames):
-            for d in self._dedup([x for x in self._detect_once(prompts, conf)
-                                  if x["confidence"] > 0.005]):
+            frame_dets = self._dedup([x for x in self._detect_once(prompts, conf)
+                                      if x["confidence"] > 0.005])
+            ndet += len(frame_dets)
+            for d in frame_dets:
                 cen = d.get("centroid_px")
                 if cen and len(cen) == 2:                  # 2D seg-mask centroid -> 3D
                     p = self._point3d_at(cen[0], cen[1])
@@ -221,6 +239,9 @@ class BoxAlignNode(Node):
                     p = self._point3d_at(0.5 * (x1 + x2), 0.5 * (y1 + y2))
                 if p:
                     raw.append(p)
+        self.get_logger().warning(
+            f"[detect] dets={ndet} raw3d={len(raw)} "
+            f"depth={self.depth is not None} fx={self.fx is not None}")
         clusters = []
         for p in raw:
             for cl in clusters:
@@ -241,6 +262,7 @@ class BoxAlignNode(Node):
             if (self.ws_x[0] < b[0] < self.ws_x[1] and abs(b[1]) < self.ws_y
                     and self.ws_z[0] < b[2] < self.ws_z[1]):
                 boxes.append({"cam": cl["mean"], "base": b, "hits": len(cl["pts"])})
+        self.get_logger().warning(f"[detect] clusters={len(clusters)} boxes={len(boxes)}")
         boxes.sort(key=lambda d: -d["base"][1])   # left (+Y) -> right
         return boxes
 
