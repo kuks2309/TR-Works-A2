@@ -1,0 +1,22 @@
+[Unit]
+Description=Hailo-8 YOLOv8s detection HTTP server (pi_yolo_server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pi_yolo_server
+# Point HEF_PATH at your compiled model; LABELS_PATH at your class list.
+Environment=HEF_PATH=/home/pi/pi_yolo_server/yolov8s.hef
+Environment=LABELS_PATH=/home/pi/pi_yolo_server/labels.txt
+Environment=OUTPUT_FORMAT=nms
+Environment=HOST=0.0.0.0
+Environment=PORT=8080
+# Use the venv interpreter if you created one (see README); otherwise python3.
+ExecStart=/home/pi/pi_yolo_server/.venv/bin/python server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

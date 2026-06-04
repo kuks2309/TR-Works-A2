@@ -26,6 +26,9 @@ Yolo/Yolov8/yolov8_env/
 .omc/
 **/.omc/
 
+# ---- D435 capture datasets (image data, not source) ----
+openarmx_ws/src/Sensor/RGBD/captures/
+
 # ---- OS ----
 .DS_Store
 Thumbs.db

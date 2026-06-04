@@ -1,0 +1,4 @@
+# One class name per line, in the SAME order as your custom YOLOv8s training
+# (line 0 = class_id 0). Replace with your real classes. Blank lines / lines
+# starting with '#' are ignored.
+box

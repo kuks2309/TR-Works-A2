@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "yolov8_node = yolov8_detection.yolov8_node:main",
+            "yolo_remote_node = yolov8_detection.yolo_remote_node:main",
             "box_plane_node = yolov8_detection.box_plane_node:main",
         ],
     },

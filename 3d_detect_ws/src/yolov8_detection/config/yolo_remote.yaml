@@ -1,0 +1,25 @@
+yolo_remote_node:
+  ros__parameters:
+    # Remote inference server (pi_yolo_server on the Raspberry Pi 5 + Hailo-8).
+    # Direct-link default: robot PC 10.42.0.1 <-> Pi 10.42.0.2.
+    server_url: "http://10.42.0.2:8080/detect"
+    request_timeout: 5.0      # seconds; abort the goal if the server does not answer
+    jpeg_quality: 80          # 1..100; lower = smaller upload, slight quality loss
+    model_label: "remote-hailo-yolov8s"   # reported in the published "model" field
+
+    # Forwarded to the server as query args (?conf=&iou=). A DetectBox goal with
+    # confidence>0 overrides conf per call.
+    confidence: 0.35
+    iou: 0.5
+
+    # D435 topics — realsense2_camera default (camera_namespace=camera, camera_name=camera)
+    image_topic: "/camera/camera/color/image_raw"
+    depth_topic: "/camera/camera/aligned_depth_to_color/image_raw"
+    camera_info_topic: "/camera/camera/color/camera_info"
+
+    # Set true to subscribe aligned depth + camera_info and back-project each box
+    # center into a 3D point in the camera frame (done locally; depth stays on this PC).
+    use_depth: false
+    sync_slop: 0.05           # seconds, color/depth stamp tolerance
+
+    publish_annotated: true
