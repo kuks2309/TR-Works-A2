@@ -24,6 +24,7 @@ import threading
 import time
 from typing import Optional
 
+import numpy as np
 import rclpy
 from PyQt5.QtCore import QObject, pyqtSignal
 from builtin_interfaces.msg import Duration as DurationMsg
@@ -32,7 +33,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -99,6 +100,8 @@ class ScenarioRosBridge(QObject):
     sig_motion_result = pyqtSignal(dict)
     # EE Leader Marker (RViz) drag pose. signal(arm: 'left'|'right', pose dict)
     sig_marker_pose = pyqtSignal(str, dict)
+    # Camera tab: emits a contiguous BGR uint8 numpy ndarray per image frame.
+    sig_image = pyqtSignal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -130,6 +133,9 @@ class ScenarioRosBridge(QObject):
         self._setup_cartesian_control()
         # ---- EE Leader Marker subscribers (RViz interactive marker drag) ----
         self._setup_ee_leader_subs()
+        # ---- Camera tab: on-demand image subscription (lazy cv_bridge) ----
+        self._img_sub = None
+        self._cv_bridge = None
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._spin_loop, daemon=True)
@@ -766,9 +772,64 @@ class ScenarioRosBridge(QObject):
         if nothing has been published yet."""
         return self._marker_pose.get(arm)
 
+    # ==================================================================
+    # Camera tab — on-demand sensor_msgs/Image subscription
+    # ==================================================================
+
+    def set_image_topic(self, topic: str) -> None:
+        """(Re)subscribe to an Image topic. Drops any prior subscription.
+        Imports cv_bridge lazily so a missing dep can't break the GUI import."""
+        self.stop_image()
+        if self._cv_bridge is None:
+            from cv_bridge import CvBridge
+            self._cv_bridge = CvBridge()
+        qos = QoSProfile(
+            depth=1,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+        )
+        self._img_sub = self._node.create_subscription(
+            Image, topic, self._on_image, qos)
+
+    def stop_image(self) -> None:
+        if self._img_sub is not None:
+            try:
+                self._node.destroy_subscription(self._img_sub)
+            except Exception:
+                pass
+            self._img_sub = None
+
+    def _on_image(self, msg) -> None:
+        try:
+            import cv2
+            if msg.encoding in ("16UC1", "mono16"):
+                depth = self._cv_bridge.imgmsg_to_cv2(msg, "passthrough")
+                vis = cv2.applyColorMap(
+                    cv2.convertScaleAbs(depth, alpha=0.03), cv2.COLORMAP_JET)
+            else:
+                # cv_bridge imgmsg_to_cv2('bgr8') is broken here (numpy 2.x +
+                # OpenCV skew -> cvtColor '!_src.empty()'); decode via numpy.
+                enc = (msg.encoding or "").lower()
+                buf = np.frombuffer(msg.data, dtype=np.uint8)
+                if enc in ("rgb8", "bgr8"):
+                    im = buf.reshape(msg.height, msg.width, 3)
+                    vis = cv2.cvtColor(im, cv2.COLOR_RGB2BGR) if enc == "rgb8" else im
+                elif enc == "mono8":
+                    vis = cv2.cvtColor(buf.reshape(msg.height, msg.width), cv2.COLOR_GRAY2BGR)
+                elif enc in ("rgba8", "bgra8"):
+                    im = buf.reshape(msg.height, msg.width, 4)
+                    vis = cv2.cvtColor(
+                        im, cv2.COLOR_RGBA2BGR if enc == "rgba8" else cv2.COLOR_BGRA2BGR)
+                else:
+                    vis = self._cv_bridge.imgmsg_to_cv2(msg, "bgr8")
+            self.sig_image.emit(np.ascontiguousarray(vis))
+        except Exception as e:
+            self.sig_error.emit(f"Image: {e}")
+
     # ---------- shutdown ----------
 
     def shutdown(self) -> None:
+        self.stop_image()
         self._stop_event.set()
         self._thread.join(timeout=2.0)
         try:

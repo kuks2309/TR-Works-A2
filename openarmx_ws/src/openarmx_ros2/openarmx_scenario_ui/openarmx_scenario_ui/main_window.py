@@ -15,11 +15,13 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMainWindow, QMessageBox, QTabWidget,
 )
 
+from openarmx_scenario_ui.camera_tab import CameraTab
 from openarmx_scenario_ui.cartesian_control_tab import CartesianControlTab
 from openarmx_scenario_ui.diagnostics_tab import DiagnosticsTab
 from openarmx_scenario_ui.joint_control_tab import JointControlTab
 from openarmx_scenario_ui.launch_manager_tab import LaunchManagerTab
 from openarmx_scenario_ui.managed_process import ManagedProcess
+from openarmx_scenario_ui.pick_and_place_tab import PickAndPlaceTab
 from openarmx_scenario_ui.scenario_action_client import ScenarioRosBridge
 from openarmx_scenario_ui.teaching_tab import TeachingTab
 
@@ -123,6 +125,10 @@ class ScenarioMainWindow(QMainWindow):
         self._tabs.addTab(self._cart_tab, "Cartesian Control")
         self._teaching_tab = TeachingTab(self._bridge, parent=self)
         self._tabs.addTab(self._teaching_tab, "Teaching")
+        self._pnp_tab = PickAndPlaceTab(parent=self)
+        self._tabs.addTab(self._pnp_tab, "Pick and Place")
+        self._camera_tab = CameraTab(self._bridge, parent=self)
+        self._tabs.addTab(self._camera_tab, "Camera")
         self._launch_tab = LaunchManagerTab(parent=self)
         self._tabs.addTab(self._launch_tab, "Launch Manager")
         # Diagnostics split into two focused tabs (same DiagnosticsTab widget,
@@ -406,6 +412,8 @@ class ScenarioMainWindow(QMainWindow):
         self._joint_tab.shutdown()
         self._cart_tab.shutdown()
         self._teaching_tab.shutdown()
+        self._pnp_tab.shutdown()
+        self._camera_tab.shutdown()
         self._node_health_tab.shutdown()
         self._pipe_health_tab.shutdown()
         self._launch_tab.shutdown()
