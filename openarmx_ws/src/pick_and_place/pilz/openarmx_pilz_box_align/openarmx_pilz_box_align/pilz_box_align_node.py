@@ -1,50 +1,42 @@
 #!/usr/bin/env python3
-"""Bimanual box-align action server using MoveIt Pilz planning.
+"""Bimanual box-align action server using MoveIt Pilz planning (MOTION only).
+
+인지/모션 분리: 이 노드는 검출을 하지 않는다. 인지 노드(box_perception_node)가
+발행하는 ``/detected_boxes`` (geometry_msgs/PoseArray, base frame)를 구독해, 그
+박스 좌표로 좌/우 팔을 정렬한다.
 
 On an ``AlignToBoxes`` goal it:
-  1. detecting -- triggers YOLOv8 ``DetectBox`` over several frames, clusters in
-     3D, and computes each box's TOP-surface centroid in the base frame.
-  2. assigning -- assigns +Y boxes to the LEFT arm, -Y to the RIGHT arm.
-  3. planning+moving -- for each assigned arm, plans a Pilz LIN motion that brings
-     link7 to (box.x, box.y, z) with the commanded hand orientation via the
-     ``/plan_kinematic_path`` SERVICE (one round-trip, no MoveGroup action 2-stage
-     handshake), then publishes the planned trajectory straight to the arm's JTC
-     topic (/<side>_joint_trajectory_controller/joint_trajectory).
+  1. reading_boxes -- 인지가 발행한 최신 /detected_boxes(base frame)를 읽는다.
+  2. assigning     -- +Y 박스는 LEFT, -Y 박스는 RIGHT 팔에 배정(goal.arms 반영).
+  3. planning+moving -- 배정된 팔마다 Pilz 모션(link7 -> box.x,box.y,z)을
+     ``/plan_kinematic_path`` 서비스로 계획하고 트래젝토리를 팔 JTC 로 발행.
 
-Pilz constrains link7 directly, so no link7->hand_tcp offset compensation is
-needed (unlike the cyclo variant).
+Pilz 가 link7 을 직접 구속하므로 link7->hand_tcp 보정은 불필요.
 
-Prerequisites (already running): D435 camera, YOLOv8 DetectBox server, calibrated
-base->camera TF, MoveIt move_group (Pilz pipeline) + the arm JTCs.
+전제 노드: box_perception_node(/detected_boxes), MoveIt move_group(Pilz) + 좌/우 JTC.
+검출/3D 변환/박스 TF 는 인지(box_perception_node) 책임 — 본 노드에는 없다.
 """
 import json
 import math
 import time
 
-import numpy as np
 import rclpy
-from cv_bridge import CvBridge
-from geometry_msgs.msg import Pose, Quaternion, Vector3
+from geometry_msgs.msg import Pose, PoseArray, Quaternion, Vector3
 from moveit_msgs.msg import (BoundingVolume, Constraints, OrientationConstraint,
                              PositionConstraint, RobotState)
 from moveit_msgs.srv import GetMotionPlan
-from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, Image
 from shape_msgs.msg import SolidPrimitive
 from tf2_ros import Buffer, TransformListener
 from trajectory_msgs.msg import JointTrajectory
 
-from yolov8_detection_msgs.action import DetectBox
 from openarmx_pilz_box_align_msgs.action import AlignToBoxes
 
 BASE = "openarmx_body_link0"
-CAM = "camera_color_optical_frame"
-DEFAULT_PROMPTS = "box, cube, block, colored cube, toy block, cardboard box, square box"
 
 
 def rpy_to_quat(roll, pitch, yaw):
@@ -58,67 +50,32 @@ def rpy_to_quat(roll, pitch, yaw):
             cr * cp * cy + sr * sp * sy]
 
 
-def quat_to_R(q):
-    x, y, z, w = q
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-    ])
-
-
-def iou(a, b):
-    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
-    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
-    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-    inter = iw * ih
-    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / ua if ua > 0 else 0.0
-
-
 class PilzBoxAlignNode(Node):
     def __init__(self):
         super().__init__("pilz_box_align_node")
-        self.declare_parameter("n_frames", 5)
-        self.declare_parameter("cluster_radius", 0.08)
-        self.declare_parameter("min_hits", 2)
-        self.declare_parameter("default_confidence", 0.02)
         self.declare_parameter("default_vel_scale", 0.3)
         self.declare_parameter("plan_time", 5.0)
-        self.declare_parameter("ws_x", [0.05, 0.70])
-        self.declare_parameter("ws_y_abs", 0.45)
-        self.declare_parameter("ws_z", [0.10, 0.32])
+        self.declare_parameter("detected_boxes_topic", "/detected_boxes")
+        self.declare_parameter("max_box_age", 10.0)
         gp = self.get_parameter
-        self.n_frames = int(gp("n_frames").value)
-        self.cluster_r = float(gp("cluster_radius").value)
-        self.min_hits = int(gp("min_hits").value)
-        self.default_conf = float(gp("default_confidence").value)
         self.default_vel = float(gp("default_vel_scale").value)
         self.plan_time = float(gp("plan_time").value)
-        self.ws_x = [float(v) for v in gp("ws_x").value]
-        self.ws_y = float(gp("ws_y_abs").value)
-        self.ws_z = [float(v) for v in gp("ws_z").value]
+        self.max_age = float(gp("max_box_age").value)
 
-        self.bridge = CvBridge()
-        self.depth = None
-        self.fx = self.fy = self.cx = self.cy = None
         cb = ReentrantCallbackGroup()
-        self.create_subscription(
-            Image, "/camera/camera/aligned_depth_to_color/image_raw",
-            self._on_depth, qos_profile_sensor_data, callback_group=cb)
-        self.create_subscription(
-            CameraInfo, "/camera/camera/color/camera_info",
-            self._on_ci, 10, callback_group=cb)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self._boxes = None        # latest /detected_boxes poses (base frame)
+        self._boxes_t = None      # rclpy Time when received
+        self.create_subscription(
+            PoseArray, str(gp("detected_boxes_topic").value),
+            self._on_boxes, 10, callback_group=cb)
         self.jtc_pub = {
             "left": self.create_publisher(
                 JointTrajectory, "/left_joint_trajectory_controller/joint_trajectory", 10),
             "right": self.create_publisher(
                 JointTrajectory, "/right_joint_trajectory_controller/joint_trajectory", 10),
         }
-        self.detect_client = ActionClient(
-            self, DetectBox, "/yolov8_node/detect", callback_group=cb)
         self.plan_client = self.create_client(
             GetMotionPlan, "/plan_kinematic_path", callback_group=cb)
         self.srv = ActionServer(
@@ -127,16 +84,27 @@ class PilzBoxAlignNode(Node):
             goal_callback=lambda _g: GoalResponse.ACCEPT,
             cancel_callback=lambda _g: CancelResponse.ACCEPT,
             callback_group=cb)
-        self.get_logger().info("pilz_box_align_node ready: action /openarmx/pilz_align_to_boxes")
+        self.get_logger().info(
+            "pilz_box_align_node ready: action /openarmx/pilz_align_to_boxes "
+            "(consumes /detected_boxes)")
 
-    # --------------------------------------------------------------- sensors
-    def _on_depth(self, m):
-        self.depth = self.bridge.imgmsg_to_cv2(m, "passthrough")
+    # ------------------------------------------------ perception input
+    def _on_boxes(self, msg):
+        self._boxes = list(msg.poses)
+        self._boxes_t = self.get_clock().now()
 
-    def _on_ci(self, m):
-        if self.fx is None:
-            k = m.k
-            self.fx, self.fy, self.cx, self.cy = k[0], k[4], k[2], k[5]
+    def _current_boxes(self):
+        """최신 /detected_boxes -> [{base:[x,y,z]}], max_box_age 이내만 유효."""
+        if self._boxes is None or self._boxes_t is None:
+            return []
+        age = (self.get_clock().now() - self._boxes_t).nanoseconds * 1e-9
+        if age > self.max_age:
+            self.get_logger().warning(
+                f"/detected_boxes 가 오래됨({age:.1f}s) — '검출요청'을 다시 실행하세요.")
+            return []
+        boxes = [{"base": [p.position.x, p.position.y, p.position.z]} for p in self._boxes]
+        boxes.sort(key=lambda b: -b["base"][1])     # +Y(left) 우선
+        return boxes
 
     def _wait(self, future, timeout=90.0):
         t0 = time.time()
@@ -152,87 +120,6 @@ class PilzBoxAlignNode(Node):
             except Exception:
                 time.sleep(0.1)
         return None
-
-    # --------------------------------------------------------------- detect
-    def _detect_once(self, prompts, conf):
-        g = DetectBox.Goal()
-        g.prompts = prompts
-        g.confidence = conf
-        g.publish_annotated = True
-        gh_f = self.detect_client.send_goal_async(g)
-        if not self._wait(gh_f):
-            return []
-        r_f = gh_f.result().get_result_async()
-        if not self._wait(r_f):
-            return []
-        return json.loads(r_f.result().result.detections_json).get("detections", [])
-
-    def _dedup(self, dets):
-        dets = sorted(dets, key=lambda d: -d["confidence"])
-        kept = []
-        for d in dets:
-            if all(iou(d["bbox_xyxy"], k["bbox_xyxy"]) < 0.6 for k in kept):
-                kept.append(d)
-        return kept
-
-    def _point3d(self, bbox):
-        if self.depth is None or self.fx is None:
-            return None
-        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
-        H, W = self.depth.shape[:2]
-        x1, y1, x2, y2 = max(0, x1), max(0, y1), min(W, x2), min(H, y2)
-        roi = self.depth[y1:y2, x1:x2].astype(float) / 1000.0
-        vv, uu = np.where(roi > 0)
-        if uu.size < 20:
-            return None
-        zz = roi[vv, uu]
-        z_near = np.percentile(zz, 5)
-        top = zz < (z_near + 0.03)
-        if top.sum() < 10:
-            top = zz <= np.percentile(zz, 30)
-        u, v, z = uu[top] + x1, vv[top] + y1, zz[top]
-        X = (u - self.cx) * z / self.fx
-        Y = (v - self.cy) * z / self.fy
-        return [float(np.mean(X)), float(np.mean(Y)), float(np.mean(z))]
-
-    def _cam_to_base(self, p):
-        tf = self._tf(BASE, CAM)
-        if tf is None:
-            return None
-        q, t = tf.rotation, tf.translation
-        R = quat_to_R([q.x, q.y, q.z, q.w])
-        return (R @ np.array(p) + np.array([t.x, t.y, t.z])).tolist()
-
-    def detect_boxes(self, prompts, conf):
-        raw = []
-        for _ in range(self.n_frames):
-            for d in self._dedup([x for x in self._detect_once(prompts, conf)
-                                  if x["confidence"] > 0.005]):
-                p = self._point3d(d["bbox_xyxy"])
-                if p:
-                    raw.append(p)
-        clusters = []
-        for p in raw:
-            for cl in clusters:
-                m = cl["mean"]
-                if sum((p[i] - m[i]) ** 2 for i in range(3)) < self.cluster_r ** 2:
-                    cl["pts"].append(p)
-                    cl["mean"] = [sum(c[i] for c in cl["pts"]) / len(cl["pts"]) for i in range(3)]
-                    break
-            else:
-                clusters.append({"pts": [p], "mean": list(p)})
-        boxes = []
-        for cl in clusters:
-            if len(cl["pts"]) < self.min_hits:
-                continue
-            b = self._cam_to_base(cl["mean"])
-            if b is None:
-                continue
-            if (self.ws_x[0] < b[0] < self.ws_x[1] and abs(b[1]) < self.ws_y
-                    and self.ws_z[0] < b[2] < self.ws_z[1]):
-                boxes.append({"cam": cl["mean"], "base": b, "hits": len(cl["pts"])})
-        boxes.sort(key=lambda d: -d["base"][1])
-        return boxes
 
     # ------------------------------------------------------------- Pilz move
     @staticmethod
@@ -273,7 +160,7 @@ class PilzBoxAlignNode(Node):
         req = GetMotionPlan.Request()
         mpr = req.motion_plan_request
         st = RobotState()
-        st.is_diff = True                 # start from the current planning-scene state
+        st.is_diff = True
         mpr.start_state = st
         mpr.group_name = f"{side}_arm"
         mpr.pipeline_id = "pilz_industrial_motion_planner"
@@ -315,36 +202,33 @@ class PilzBoxAlignNode(Node):
     def _execute(self, gh):
         goal = gh.request
         res = AlignToBoxes.Result()
-        prompts = goal.prompts.strip() if goal.prompts.strip() else DEFAULT_PROMPTS
-        conf = goal.confidence if goal.confidence > 0.0 else self.default_conf
         vel = goal.vel_scale if goal.vel_scale > 0.0 else self.default_vel
         planner = goal.planner.strip() if goal.planner.strip() else "LIN"
         quat = rpy_to_quat(goal.roll_deg, goal.pitch_deg, goal.yaw_deg)
 
-        self._fb(gh, "detecting", 0.1)
-        boxes = self.detect_boxes(prompts, conf)
-        # box TF/마커는 인지 노드(box_perception_node)가 발행 — 모션 백엔드는
-        # box TF 를 발행하지 않는다(인지/모션 분리). 검출 결과는 모션 타깃에만 사용.
-        res.detections_json = json.dumps([{"base": b["base"], "hits": b["hits"]} for b in boxes])
+        # 검출은 인지(box_perception_node) 책임 — 여기서는 최신 /detected_boxes 사용.
+        self._fb(gh, "reading_boxes", 0.1)
+        boxes = self._current_boxes()
+        res.detections_json = json.dumps([{"base": b["base"]} for b in boxes])
         if not boxes:
             gh.abort()
             res.success = False
-            res.message = "no boxes detected"
+            res.message = "no detected boxes (먼저 '검출요청'으로 인지 실행 → /detected_boxes)"
             return res
 
         self._fb(gh, "assigning", 0.4)
         want = goal.arms.strip().lower() or "both"
         assigned = {}
-        left_boxes = sorted([b for b in boxes if b["base"][1] >= 0], key=lambda b: -b["hits"])
-        right_boxes = sorted([b for b in boxes if b["base"][1] < 0], key=lambda b: -b["hits"])
+        left_boxes = [b for b in boxes if b["base"][1] >= 0]                  # 이미 +Y 우선 정렬
+        right_boxes = sorted([b for b in boxes if b["base"][1] < 0], key=lambda b: b["base"][1])
         if want in ("both", "left") and left_boxes:
             assigned["left"] = left_boxes[0]
         if want in ("both", "right") and right_boxes:
             assigned["right"] = right_boxes[0]
         if want in ("both", "left") and "left" not in assigned and boxes:
-            assigned["left"] = max(boxes, key=lambda b: b["hits"])
+            assigned["left"] = boxes[0]
         if want in ("both", "right") and "right" not in assigned and boxes:
-            assigned["right"] = max(boxes, key=lambda b: b["hits"])
+            assigned["right"] = boxes[-1]
 
         self._fb(gh, "planning", 0.6)
         report = {}
@@ -370,7 +254,8 @@ class PilzBoxAlignNode(Node):
         self._fb(gh, "done", 1.0)
         gh.succeed()
         res.success = True
-        res.message = f"detected {len(boxes)} box(es); planned/moved {list(assigned.keys())} (Pilz {planner})"
+        res.message = (f"{len(boxes)} box(es) from perception; "
+                       f"planned/moved {list(assigned.keys())} (Pilz {planner})")
         res.assignments_json = json.dumps(report)
         return res
 

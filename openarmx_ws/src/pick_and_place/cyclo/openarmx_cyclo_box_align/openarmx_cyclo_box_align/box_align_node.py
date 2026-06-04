@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
-"""Bimanual box-align action server.
+"""Bimanual box-align action server (cyclo MoveL, MOTION only).
+
+인지/모션 분리: 이 노드는 검출하지 않는다. 인지 노드(box_perception_node)가
+발행하는 ``/detected_boxes`` (geometry_msgs/PoseArray, base frame)를 구독해, 그
+박스 좌표로 좌/우 팔을 cyclo MoveL 로 정렬한다.
 
 On an ``AlignToBoxes`` goal it:
-  1. detecting  -- triggers the on-demand YOLOv8 ``DetectBox`` action over several
-     frames, projects each detection's SEGMENTATION-MASK centroid (centroid_px) to
-     3D via the aligned depth, clusters the points, and computes each box's centroid
-     in the robot base frame (publishes box_<i> TFs).
-  2. assigning  -- sorts boxes left->right by base-frame Y and assigns +Y boxes to
-     the LEFT arm, -Y boxes to the RIGHT arm (honouring goal.arms).
-  3. moving     -- for each assigned arm, builds a link7 target at (box.x, box.y, z)
-     with the commanded hand orientation (default R180 P0 Y0 = vertical-down),
-     compensates the fixed link7->hand_tcp offset, and publishes a MoveL to the
-     cyclo controller on /openarmx/<side>/movel.
+  1. reading_boxes -- 인지가 발행한 최신 /detected_boxes(base frame)를 읽는다.
+  2. assigning     -- +Y 박스는 LEFT, -Y 박스는 RIGHT 팔에 배정(goal.arms 반영).
+  3. moving        -- 팔마다 link7 target (box.x, box.y, z) 를 만들고 고정
+     link7->hand_tcp 오프셋을 보정해 ``/openarmx/<side>/movel`` 로 MoveL 발행.
 
-Prerequisites (must already be running): the D435 camera, the YOLOv8 DetectBox
-action server (/yolov8_node/detect), the calibrated base->camera TF, and the
-cyclo MoveL controllers (/openarmx/{left,right}/movel).
+전제 노드: box_perception_node(/detected_boxes), cyclo MoveL 컨트롤러
+(/openarmx/{left,right}/movel). 검출/3D 변환/박스 TF 는 인지 책임 — 본 노드엔 없다.
 """
 import json
 import math
@@ -23,32 +20,18 @@ import time
 
 import numpy as np
 import rclpy
-from cv_bridge import CvBridge
-from geometry_msgs.msg import TransformStamped
-from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from geometry_msgs.msg import PoseArray
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, Image
-from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
+from tf2_ros import Buffer, TransformListener
 
-from yolov8_detection_msgs.action import DetectBox
 from openarmx_scenario_player_msgs.msg import MoveL
 from openarmx_cyclo_box_align_msgs.action import AlignToBoxes
 
 BASE = "openarmx_body_link0"
-CAM = "camera_color_optical_frame"
-# realsense publishes aligned depth RELIABLE; a BEST_EFFORT sub receives it only
-# intermittently here, so match RELIABLE for stable depth reception.
-DEPTH_QOS = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
-                       history=QoSHistoryPolicy.KEEP_LAST, depth=5)
-# The remote seg model has FIXED classes (mini-box-blue/green/orange/red/yellow);
-# yolo_remote_node treats DetectBox `prompts` as a class-name allow-list filter.
-# Empty -> no filter (detect all 5 colours). A goal may pass specific
-# 'mini-box-<colour>' names (e.g. from the UI colour checkboxes) to restrict.
-DEFAULT_PROMPTS = ""
 
 
 def rpy_to_quat(roll, pitch, yaw):
@@ -72,85 +55,54 @@ def quat_to_R(q):
     ])
 
 
-def iou(a, b):
-    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
-    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
-    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-    inter = iw * ih
-    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / ua if ua > 0 else 0.0
-
-
 class BoxAlignNode(Node):
     def __init__(self):
         super().__init__("box_align_node")
-        self.declare_parameter("n_frames", 5)
-        self.declare_parameter("cluster_radius", 0.08)
-        self.declare_parameter("min_hits", 2)          # cluster must appear in >= this many frames
         self.declare_parameter("move_time", 6.0)
-        self.declare_parameter("default_confidence", 0.02)
-        self.declare_parameter("ws_x", [0.05, 0.70])
-        self.declare_parameter("ws_y_abs", 0.45)
-        self.declare_parameter("ws_z", [0.10, 0.32])
+        self.declare_parameter("detected_boxes_topic", "/detected_boxes")
+        self.declare_parameter("max_box_age", 10.0)
         gp = self.get_parameter
-        self.n_frames = int(gp("n_frames").value)
-        self.cluster_r = float(gp("cluster_radius").value)
-        self.min_hits = int(gp("min_hits").value)
         self.move_time = float(gp("move_time").value)
-        self.default_conf = float(gp("default_confidence").value)
-        self.ws_x = [float(v) for v in gp("ws_x").value]
-        self.ws_y = float(gp("ws_y_abs").value)
-        self.ws_z = [float(v) for v in gp("ws_z").value]
+        self.max_age = float(gp("max_box_age").value)
 
-        self.bridge = CvBridge()
-        self.depth = None
-        self.fx = self.fy = self.cx = self.cy = None
         cb = ReentrantCallbackGroup()
-        self.create_subscription(
-            Image, "/camera/camera/aligned_depth_to_color/image_raw",
-            self._on_depth, DEPTH_QOS, callback_group=cb)
-        self.create_subscription(
-            CameraInfo, "/camera/camera/color/camera_info",
-            self._on_ci, 10, callback_group=cb)
-        self.br = StaticTransformBroadcaster(self)
-        self._max_box = 0          # highest box_<i> count published (for stale-frame parking)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self._boxes = None        # latest /detected_boxes poses (base frame)
+        self._boxes_t = None      # rclpy Time when received
+        self.create_subscription(
+            PoseArray, str(gp("detected_boxes_topic").value),
+            self._on_boxes, 10, callback_group=cb)
         self.movel_pub = {
             "left": self.create_publisher(MoveL, "/openarmx/left/movel", 10),
             "right": self.create_publisher(MoveL, "/openarmx/right/movel", 10),
         }
-        self.detect_client = ActionClient(
-            self, DetectBox, "/yolov8_node/detect", callback_group=cb)
         self.srv = ActionServer(
             self, AlignToBoxes, "/openarmx/align_to_boxes",
             execute_callback=self._execute,
             goal_callback=lambda _g: GoalResponse.ACCEPT,
             cancel_callback=lambda _g: CancelResponse.ACCEPT,
             callback_group=cb)
-        self.get_logger().info("box_align_node ready: action /openarmx/align_to_boxes")
+        self.get_logger().info(
+            "box_align_node ready: action /openarmx/align_to_boxes (consumes /detected_boxes)")
 
-    # --------------------------------------------------------------- sensors
-    def _on_depth(self, m):
-        try:
-            # numpy direct (cv_bridge broken under numpy 2.x); depth is 16UC1 mm.
-            self.depth = np.frombuffer(m.data, dtype=np.uint16).reshape(m.height, m.width)
-            if not getattr(self, "_depth_seen", False):
-                self._depth_seen = True
-                self.get_logger().warning(f"[detect] first depth {m.height}x{m.width} {m.encoding}")
-        except Exception as e:  # noqa: BLE001
-            self.get_logger().error(f"depth decode failed: {e}")
+    # ------------------------------------------------ perception input
+    def _on_boxes(self, msg):
+        self._boxes = list(msg.poses)
+        self._boxes_t = self.get_clock().now()
 
-    def _on_ci(self, m):
-        if self.fx is None:
-            k = m.k
-            self.fx, self.fy, self.cx, self.cy = k[0], k[4], k[2], k[5]
-
-    def _wait(self, future, timeout=90.0):
-        t0 = time.time()
-        while rclpy.ok() and not future.done() and time.time() - t0 < timeout:
-            time.sleep(0.05)
-        return future.done()
+    def _current_boxes(self):
+        """최신 /detected_boxes -> [{base:[x,y,z]}], max_box_age 이내만 유효."""
+        if self._boxes is None or self._boxes_t is None:
+            return []
+        age = (self.get_clock().now() - self._boxes_t).nanoseconds * 1e-9
+        if age > self.max_age:
+            self.get_logger().warning(
+                f"/detected_boxes 가 오래됨({age:.1f}s) — '검출요청'을 다시 실행하세요.")
+            return []
+        boxes = [{"base": [p.position.x, p.position.y, p.position.z]} for p in self._boxes]
+        boxes.sort(key=lambda b: -b["base"][1])     # +Y(left) 우선
+        return boxes
 
     def _tf(self, target, source, timeout=5.0):
         t0 = time.time()
@@ -160,138 +112,6 @@ class BoxAlignNode(Node):
             except Exception:
                 time.sleep(0.1)
         return None
-
-    # --------------------------------------------------------------- detect
-    def _detect_once(self, prompts, conf):
-        g = DetectBox.Goal()
-        g.prompts = prompts
-        g.confidence = conf
-        g.publish_annotated = True
-        gh_f = self.detect_client.send_goal_async(g)
-        if not self._wait(gh_f):
-            return []
-        gh = gh_f.result()
-        r_f = gh.get_result_async()
-        if not self._wait(r_f):
-            return []
-        return json.loads(r_f.result().result.detections_json).get("detections", [])
-
-    def _dedup(self, dets):
-        dets = sorted(dets, key=lambda d: -d["confidence"])
-        kept = []
-        for d in dets:
-            if all(iou(d["bbox_xyxy"], k["bbox_xyxy"]) < 0.6 for k in kept):
-                kept.append(d)
-        return kept
-
-    def _point3d_at(self, u, v, win=5):
-        """Project the 2D image point (u, v) -- the segmentation-mask centroid -- to a
-        3D point in the camera frame, using the aligned depth + intrinsics. A small
-        window around (u, v) is sampled and the nearest-surface (box-top) median depth
-        is used, so the point is robust to single-pixel depth holes and sits on the box."""
-        if self.depth is None or self.fx is None:
-            return None
-        H, W = self.depth.shape[:2]
-        ui, vi = int(round(u)), int(round(v))
-        if not (0 <= ui < W and 0 <= vi < H):
-            return None
-        x1, y1 = max(0, ui - win), max(0, vi - win)
-        x2, y2 = min(W, ui + win + 1), min(H, vi + win + 1)
-        vals = (self.depth[y1:y2, x1:x2].astype(float) / 1000.0).ravel()
-        vals = vals[vals > 0]
-        if vals.size < 5:
-            return None
-        near = vals[vals < np.percentile(vals, 5) + 0.03]   # nearest surface = box top
-        z = float(np.median(near)) if near.size else float(np.median(vals))
-        X = (u - self.cx) * z / self.fx
-        Y = (v - self.cy) * z / self.fy
-        return [float(X), float(Y), z]
-
-    def _cam_to_base(self, p):
-        tf = self._tf(BASE, CAM)
-        if tf is None:
-            return None
-        q, t = tf.rotation, tf.translation
-        R = quat_to_R([q.x, q.y, q.z, q.w])
-        return (R @ np.array(p) + np.array([t.x, t.y, t.z])).tolist()
-
-    def _base_align_quat(self):
-        tf = self._tf(CAM, BASE)
-        if tf is None:
-            return [0.0, 0.0, 0.0, 1.0]
-        r = tf.rotation
-        return [r.x, r.y, r.z, r.w]
-
-    def detect_boxes(self, prompts, conf):
-        """Returns list of dicts {cam:[x,y,z], base:[x,y,z]} for each box."""
-        raw = []
-        ndet = 0
-        for _ in range(self.n_frames):
-            frame_dets = self._dedup([x for x in self._detect_once(prompts, conf)
-                                      if x["confidence"] > 0.005])
-            ndet += len(frame_dets)
-            for d in frame_dets:
-                cen = d.get("centroid_px")
-                if cen and len(cen) == 2:                  # 2D seg-mask centroid -> 3D
-                    p = self._point3d_at(cen[0], cen[1])
-                else:                                      # backend w/o seg -> bbox centre px
-                    x1, y1, x2, y2 = d["bbox_xyxy"]
-                    p = self._point3d_at(0.5 * (x1 + x2), 0.5 * (y1 + y2))
-                if p:
-                    raw.append(p)
-        self.get_logger().warning(
-            f"[detect] dets={ndet} raw3d={len(raw)} "
-            f"depth={self.depth is not None} fx={self.fx is not None}")
-        clusters = []
-        for p in raw:
-            for cl in clusters:
-                m = cl["mean"]
-                if sum((p[i] - m[i]) ** 2 for i in range(3)) < self.cluster_r ** 2:
-                    cl["pts"].append(p)
-                    cl["mean"] = [sum(c[i] for c in cl["pts"]) / len(cl["pts"]) for i in range(3)]
-                    break
-            else:
-                clusters.append({"pts": [p], "mean": list(p)})
-        boxes = []
-        for cl in clusters:
-            if len(cl["pts"]) < self.min_hits:        # drop one-off (noise) detections
-                continue
-            b = self._cam_to_base(cl["mean"])
-            if b is None:
-                continue
-            if (self.ws_x[0] < b[0] < self.ws_x[1] and abs(b[1]) < self.ws_y
-                    and self.ws_z[0] < b[2] < self.ws_z[1]):
-                boxes.append({"cam": cl["mean"], "base": b, "hits": len(cl["pts"])})
-        self.get_logger().warning(f"[detect] clusters={len(clusters)} boxes={len(boxes)}")
-        boxes.sort(key=lambda d: -d["base"][1])   # left (+Y) -> right
-        return boxes
-
-    def publish_box_tfs(self, boxes):
-        """Publish box_<i> for the current detection. Frames from a previous, larger
-        detection are 'parked' far below (z=-100 in camera frame) so stale axes from
-        an earlier run disappear instead of lingering in RViz's static TF buffer."""
-        q = self._base_align_quat()
-        tfs = []
-        for i, b in enumerate(boxes):
-            t = TransformStamped()
-            t.header.stamp = self.get_clock().now().to_msg()
-            t.header.frame_id = CAM
-            t.child_frame_id = f"box_{i}"
-            c = b["cam"]
-            t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = map(float, c)
-            t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z, t.transform.rotation.w = map(float, q)
-            tfs.append(t)
-        for i in range(len(boxes), self._max_box):     # park stale frames from a prior run
-            t = TransformStamped()
-            t.header.stamp = self.get_clock().now().to_msg()
-            t.header.frame_id = CAM
-            t.child_frame_id = f"box_{i}"
-            t.transform.translation.z = -100.0
-            t.transform.rotation.w = 1.0
-            tfs.append(t)
-        self._max_box = max(self._max_box, len(boxes))
-        if tfs:
-            self.br.sendTransform(tfs)
 
     # ----------------------------------------------------------------- move
     def move_arm(self, side, box_base, z, quat):
@@ -333,42 +153,37 @@ class BoxAlignNode(Node):
     def _execute(self, gh):
         goal = gh.request
         res = AlignToBoxes.Result()
-        prompts = goal.prompts.strip() if goal.prompts.strip() else DEFAULT_PROMPTS
-        conf = goal.confidence if goal.confidence > 0.0 else self.default_conf
         quat = rpy_to_quat(goal.roll_deg, goal.pitch_deg, goal.yaw_deg)
 
-        self._fb(gh, "detecting", 0.1)
-        boxes = self.detect_boxes(prompts, conf)
-        self.publish_box_tfs(boxes)
-        res.detections_json = json.dumps([{"base": b["base"], "hits": b["hits"]} for b in boxes])
+        # 검출은 인지(box_perception_node) 책임 — 여기서는 최신 /detected_boxes 사용.
+        self._fb(gh, "reading_boxes", 0.1)
+        boxes = self._current_boxes()
+        res.detections_json = json.dumps([{"base": b["base"]} for b in boxes])
         if not boxes:
             gh.abort()
             res.success = False
-            res.message = "no boxes detected"
+            res.message = "no detected boxes (먼저 '검출요청'으로 인지 실행 → /detected_boxes)"
             return res
 
         self._fb(gh, "assigning", 0.4)
         want = goal.arms.strip().lower() or "both"
-        assigned = {}   # side -> box
-        # pick the most-reliably-detected (highest-hits) box on each side
-        left_boxes = sorted([b for b in boxes if b["base"][1] >= 0], key=lambda b: -b["hits"])
-        right_boxes = sorted([b for b in boxes if b["base"][1] < 0], key=lambda b: -b["hits"])
+        assigned = {}
+        left_boxes = [b for b in boxes if b["base"][1] >= 0]                  # 이미 +Y 우선 정렬
+        right_boxes = sorted([b for b in boxes if b["base"][1] < 0], key=lambda b: b["base"][1])
         if want in ("both", "left") and left_boxes:
             assigned["left"] = left_boxes[0]
         if want in ("both", "right") and right_boxes:
             assigned["right"] = right_boxes[0]
-        # fallback: requested arm with no same-side box -> highest-hits box overall
         if want in ("both", "left") and "left" not in assigned and boxes:
-            assigned["left"] = max(boxes, key=lambda b: b["hits"])
+            assigned["left"] = boxes[0]
         if want in ("both", "right") and "right" not in assigned and boxes:
-            assigned["right"] = max(boxes, key=lambda b: b["hits"])
+            assigned["right"] = boxes[-1]
 
         self._fb(gh, "moving", 0.6)
         report = {}
         for side, b in assigned.items():
             tgt = self.move_arm(side, b["base"], goal.z, quat)
             report[side] = {"box_base": b["base"], "link7_target": tgt}
-        # let the motions settle, then measure error
         time.sleep(self.move_time + 1.0)
         for side in assigned:
             cur = self.link7_pos(side)
@@ -381,7 +196,7 @@ class BoxAlignNode(Node):
         self._fb(gh, "done", 1.0)
         gh.succeed()
         res.success = True
-        res.message = f"detected {len(boxes)} box(es); moved {list(assigned.keys())}"
+        res.message = f"{len(boxes)} box(es) from perception; moved {list(assigned.keys())}"
         res.assignments_json = json.dumps(report)
         return res
 

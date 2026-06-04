@@ -7,6 +7,25 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-05 01:50 (KST) — ③ 모션 백엔드(pilz·cyclo)를 /detected_boxes 소비로 전환 (인지·모션 완전 분리)
+
+### 증상 / 배경
+③ 전: pilz/cyclo box_align 이 *자체 검출*(DetectBox·depth·3D·클러스터)을 수행해 인지(`/detected_boxes`, 마커는 정상)와 별개로 동작.
+- pilz: `detect_boxes` 가 0개 → "no boxes detected" abort.
+- cyclo: depth 를 RELIABLE 로 구독 → `d435_qos.yaml` 의 BEST_EFFORT depth 와 비호환(데이터 0).
+- 백엔드 라디오를 바꿔도 정렬 백엔드가 재기동되지 않아(선택 cyclo인데 pilz 프로세스가 떠 있음) `/openarmx/align_to_boxes` 서버 부재 → "Waiting for an action server...".
+
+### 수정
+- [pilz_box_align_node.py](../../openarmx_ws/src/pick_and_place/pilz/openarmx_pilz_box_align/openarmx_pilz_box_align/pilz_box_align_node.py) / [cyclo box_align_node.py](../../openarmx_ws/src/pick_and_place/cyclo/openarmx_cyclo_box_align/openarmx_cyclo_box_align/box_align_node.py): 자체 검출/depth/3D/박스TF 전부 제거, **`/detected_boxes`(PoseArray, base) 구독**으로 교체. 최신값(max_box_age 10s)으로 assign→move, 없으면 abort("먼저 '검출요청'").
+- 두 launch([pilz](../../openarmx_ws/src/pick_and_place/pilz/openarmx_pilz_box_align/launch/pilz_box_align.launch.py)/[cyclo](../../openarmx_ws/src/pick_and_place/cyclo/openarmx_cyclo_box_align/launch/box_align.launch.py))에서 검출 파라미터(n_frames/cluster_radius/min_hits/default_confidence) 제거.
+- [pick_and_place_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/pick_and_place_tab.py) `_on_backend_changed`: 백엔드 변경 시 떠있는 정렬 백엔드 자동 종료(불일치·"Waiting" 방지).
+- 효과: **depth QoS 충돌 소멸**(depth 소비자는 box_perception_node 하나), pilz "no boxes" 우회, 백엔드 전환 정합. 빌드 exit 0.
+
+### 흐름 / 재발 방지
+검출요청(인지 `/detected_boxes`+마커) → 모션 컨트롤러(cyclo MoveL / MoveIt Pilz move_group) 기동 → 정렬 백엔드 Start(선택) → Run AlignToBoxes(좌표 소비·이동). 모션은 검출하지 않음 — 검출/3D/QoS 는 인지(box_perception_node) 단일 책임. 실로봇 AlignToBoxes 이동 라이브 검증 대기.
+
+---
+
 ## 2026-06-05 01:25 (KST) — 인지/모션 분리: box_perception_node 신설(검출→3D 좌표+마커), 모션 백엔드 box TF 발행 제거
 
 ### 증상 / 배경

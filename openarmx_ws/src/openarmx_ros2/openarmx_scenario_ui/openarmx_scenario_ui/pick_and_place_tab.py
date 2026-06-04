@@ -337,6 +337,12 @@ class PickAndPlaceTab(QWidget):
         pilz = BACKENDS[self._backend_key()]["pilz_fields"]
         for w in (self._lbl_vel, self._vel, self._lbl_planner, self._planner):
             w.setEnabled(pilz)
+        # 백엔드를 바꾸면 떠있는(이전) 정렬 백엔드를 종료한다 — 안 그러면 선택은
+        # cyclo인데 pilz가 떠 있는 식의 불일치로 AlignToBoxes 가 서버를 못 찾는다
+        # ("Waiting for an action server..."). 새 백엔드는 'Start'로 다시 기동.
+        if self._backend_proc.running:
+            self._backend_proc.stop()
+            self._set_status("백엔드 변경 — 정렬 백엔드 종료됨. 'Start'로 선택 백엔드를 기동하세요.")
         self._refresh_status()   # 백엔드 라벨을 선택 백엔드 기준으로 즉시 갱신
 
     def _selected_classes(self) -> str:
