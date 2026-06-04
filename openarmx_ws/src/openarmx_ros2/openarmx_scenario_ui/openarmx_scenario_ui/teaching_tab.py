@@ -58,6 +58,8 @@ CART_COL_COUNT = len(_CART_HEADERS)  # 13
 # width so the joint/gripper and Cartesian grids line up instead of being sized
 # per-content (which made the grid jagged).
 _VALUE_COL_W = 72
+# Same fixed width for the "Pose명" (name) column in BOTH tables so they align.
+_NAME_COL_W = 120
 
 # Capture-frame choices. "" sentinel = resolve per-arm to openarmx_<arm>_link0.
 _FRAME_CHOICES = [
@@ -153,29 +155,34 @@ class TeachingTab(QWidget):
         return h
 
     def _make_table(self, headers: list) -> QTableWidget:
-        t = QTableWidget(0, len(headers))
-        t.setHorizontalHeaderLabels(headers)
+        # IDENTICAL column sizing in BOTH tables: the name column and every value
+        # column are the SAME fixed width regardless of how many columns a table
+        # has (17 vs 13). A trailing Stretch "spacer" column absorbs the leftover
+        # width so the table still fills the panel. Previously col-0 was Stretch,
+        # which made the 17-col and 13-col tables size their columns completely
+        # differently (the user's complaint).
+        ncols = len(headers)
+        t = QTableWidget(0, ncols + 1)                          # +1 spacer
+        t.setHorizontalHeaderLabels(list(headers) + [""])
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.setSelectionMode(QAbstractItemView.SingleSelection)
         t.verticalHeader().setDefaultSectionSize(26)
         hh = t.horizontalHeader()
-        # Uniform value-column widths (project request): every numeric/value
-        # column is the same fixed width (_VALUE_COL_W) in both tables instead of
-        # per-content sizing; the name column stretches to take the slack.
         hh.setMinimumSectionSize(0)
-        for c in range(1, len(headers)):
+        hh.setSectionResizeMode(0, QHeaderView.Fixed)           # name col
+        t.setColumnWidth(0, _NAME_COL_W)
+        for c in range(1, ncols):                               # value cols
             hh.setSectionResizeMode(c, QHeaderView.Fixed)
             t.setColumnWidth(c, _VALUE_COL_W)
-        hh.setSectionResizeMode(0, QHeaderView.Stretch)         # name col
-        # Value cells use the shared gray look (like the Jog/Marker grids);
-        # column headers (the per-axis labels) use the shared bold axis style.
-        # Explicit dark text + a light-blue selected state. Without this, the
-        # QTableWidget::item background override removes Qt's selection color and
-        # the selected row keeps the default white HighlightedText → white text
-        # on the #f0f0f0 cell = invisible.
+        hh.setSectionResizeMode(ncols, QHeaderView.Stretch)     # spacer
+        # Value cells use the shared gray look; headers use the shared bold axis
+        # style. Table-level selection color so the whole selected row (incl. the
+        # empty spacer cell) is light-blue with dark text — without it the default
+        # white HighlightedText on the gray cell would be invisible.
         t.setStyleSheet(
+            "QTableWidget { selection-background-color:#cfe3fb; "
+            "selection-color:#111; }"
             f"QTableWidget::item {{ {VALUE_CELL_QSS} color:#222; }}"
-            "QTableWidget::item:selected { background:#cfe3fb; color:#111; }"
             f"QHeaderView::section {{ {AXIS_LABEL_QSS} }}")
         t.itemChanged.connect(
             lambda item, tbl=t: self._on_item_changed(tbl, item))
@@ -466,6 +473,11 @@ class TeachingTab(QWidget):
             return
         row, col = item.row(), item.column()
         if row < 0 or row >= len(self._waypoints):
+            return
+        # Trailing Stretch spacer column carries no data — ignore edits there.
+        data_cols = (JOINT_COL_COUNT if table is self._tbl_joint
+                     else CART_COL_COUNT)
+        if col >= data_cols:
             return
         wp = self._waypoints[row]
 
