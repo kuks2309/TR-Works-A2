@@ -135,9 +135,9 @@ INIT_POSITION_DEG["openarmx_right_joint1"] = -30.0
 INIT_POSITION_DEG["openarmx_right_joint4"] = 60.0
 INIT_POSITION_DEG["openarmx_right_joint7"] = -30.0
 
-# Gripper presets (meters): fully open.
+# Gripper presets (meters). INIT 도 현재 포즈(닫힘 0.0)로 등록.
 HOME_GRIPPER_M = {name: 0.0 for name in GRIPPER_NAMES}
-INIT_GRIPPER_M = {name: 0.044 for name in GRIPPER_NAMES}
+INIT_GRIPPER_M = {name: 0.0 for name in GRIPPER_NAMES}
 
 
 def spinbox_name(joint_name: str) -> str:
