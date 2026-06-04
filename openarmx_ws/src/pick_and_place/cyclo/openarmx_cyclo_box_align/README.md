@@ -1,30 +1,25 @@
 # openarmx_cyclo_box_align
 
-Bimanual **box detect → left/right arm assignment → move above box** orchestration
-for OpenArmX. One `AlignToBoxes` action call detects the boxes, decides which arm
-takes which box, and drives each assigned arm above its box at a commanded height
-and hand orientation.
+Bimanual **consume detected boxes → left/right arm assignment → move above box**
+orchestration for OpenArmX. **Detection/3D is NOT done here** — it is a separate
+perception node (`box_perception_node`); one `AlignToBoxes` action call consumes the
+latest `/detected_boxes`, decides which arm takes which box, and drives each assigned
+arm above its box at a commanded height and hand orientation.
 
 ```
-DetectBox (YOLOv8 on-demand) ─▶ accumulate N frames ─▶ 3D cluster
-        │                                                   │ box-top centroid (base frame)
-        ▼                                                   ▼
-  assign by base Y:  +Y → LEFT arm,  −Y → RIGHT arm
+box_perception_node (perception: detect + 3D)  ─▶  /detected_boxes (PoseArray, base)
         │
-        ▼
+        ▼  (consume latest)   assign by base Y:  +Y → LEFT arm,  −Y → RIGHT arm
   link7 target = (box.x, box.y, z) + commanded RPY  ─▶ /openarmx/<side>/movel (cyclo QP)
 ```
 
 ## Pipeline order (what the user runs)
 
-1. **Camera** — D435 (`realsense2_camera`) publishing `/camera/camera/...`.
-2. **YOLOv8 server** — on-demand `DetectBox` action server `/yolov8_node/detect`
-   (`3d_detect_ws`, run via `run_yolov8_ros.sh`, `use_depth:=true`).
-3. **base↔camera TF + cyclo MoveL controllers** — e.g. the scenario stack
-   (`scenario_player_with_ee_leader.launch.py`) which provides the
-   `d435_center→camera_link` bridge and `/openarmx/{left,right}/movel`.
-4. **This node** — `ros2 launch openarmx_cyclo_box_align box_align.launch.py`.
-5. **Command** — send an `AlignToBoxes` goal (below).
+1. **Perception** — `box_perception_node` publishing `/detected_boxes` (which itself
+   needs the D435 camera + the YOLOv8 bridge running upstream).
+2. **cyclo MoveL controllers** — `/openarmx/{left,right}/movel`.
+3. **This node** — `ros2 launch openarmx_cyclo_box_align box_align.launch.py`.
+4. **Command** — send an `AlignToBoxes` goal (below).
 
 ## Command
 
@@ -47,13 +42,12 @@ Result: `success`, `detections_json` (boxes in base frame), `assignments_json`
 
 ## How it works
 
-- **Detection** reuses the on-demand `DetectBox` action over `n_frames` frames and
-  clusters detections in 3D (YOLO-World on plain cubes is stochastic per frame).
-  Each box's 3D point is the **box-top surface centroid** (nearest-depth points in
-  the bbox), robust to loose low-confidence bboxes. A workspace filter
-  (`ws_x`/`ws_y_abs`/`ws_z`) rejects edge/background noise.
+- **Perception is a separate node.** Detection / 3D / box positions are produced by
+  `box_perception_node`; this action server only **subscribes to `/detected_boxes`**
+  (geometry_msgs/PoseArray, base frame) and uses the latest set. It does **not**
+  detect, read depth, or publish box TFs (perception and motion are decoupled).
 - **Assignment**: boxes are sorted left→right by base-frame Y; `+Y` → LEFT arm,
-  `−Y` → RIGHT arm. `box_<i>` TFs are published for RViz.
+  `−Y` → RIGHT arm.
 - **Motion**: the cyclo controller commands `hand_tcp`, which sits a fixed offset
   below `link7`; the node looks up `link7→hand_tcp` and compensates so **link7**
   lands at the commanded `z`. A reachable `z` keeps both position and orientation

@@ -31,8 +31,9 @@ HW_LAUNCH_CMD = [
     "use_fake_hardware:=false",
     "robot_controller:=joint_trajectory_controller",
     "control_mode:=mit",
-    "right_can_interface:=can0",
-    "left_can_interface:=can1",
+    # follower 팔 = can2(right)/can3(left). can0/can1 은 leader(텔레옵 입력).
+    "right_can_interface:=can2",
+    "left_can_interface:=can3",
     "can_fd:=false",
     # The scenario_player workflow launch (_scenario_workflow_cmd) already owns
     # the RViz instance (openarmx_scenario.rviz). Without this, HW bringup also

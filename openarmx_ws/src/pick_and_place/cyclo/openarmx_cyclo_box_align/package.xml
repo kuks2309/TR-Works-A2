@@ -4,20 +4,18 @@
   <name>openarmx_cyclo_box_align</name>
   <version>0.1.0</version>
   <description>
-    Bimanual box-align: on an AlignToBoxes action goal, detect boxes via the
-    on-demand YOLOv8 DetectBox action, assign each to the nearer arm by base-frame
-    Y, and move the assigned arm's link7 above its box at a commanded height and
-    hand orientation (default vertical-down) through the cyclo MoveL controllers.
+    Bimanual box-align (motion only): on an AlignToBoxes action goal, consume the
+    latest detected boxes (/detected_boxes from box_perception_node), assign each to
+    the nearer arm by base-frame Y, and move the assigned arm's link7 above its box at
+    a commanded height and hand orientation (default vertical-down) through the cyclo
+    MoveL controllers.
   </description>
   <maintainer email="drko0808@gmail.com">openarmx</maintainer>
   <license>Apache-2.0</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>yolov8_detection_msgs</exec_depend>
   <exec_depend>openarmx_scenario_player_msgs</exec_depend>
   <exec_depend>openarmx_cyclo_box_align_msgs</exec_depend>
 

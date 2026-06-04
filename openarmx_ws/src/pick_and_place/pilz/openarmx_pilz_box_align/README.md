@@ -1,13 +1,14 @@
 # openarmx_pilz_box_align
 
-Bimanual **box detect → left/right arm assignment → move above box** for OpenArmX,
-using **MoveIt Pilz planning** as the motion backend (the cyclo-backed variant is
-`openarmx_cyclo_box_align`).
+Bimanual **consume detected boxes → left/right arm assignment → move above box**
+for OpenArmX, using **MoveIt Pilz planning** as the motion backend (the cyclo-backed
+variant is `openarmx_cyclo_box_align`). **Detection/3D is NOT done here** — it is a
+separate perception node (`box_perception_node`); this node consumes its output.
 
 ```
-DetectBox (YOLOv8) ─▶ accumulate N frames ─▶ 3D cluster ─▶ box-top centroid (base)
+box_perception_node (perception: detect + 3D)  ─▶  /detected_boxes (PoseArray, base)
         │
-        ▼  assign +Y → LEFT arm, −Y → RIGHT arm
+        ▼  (consume latest)   assign +Y → LEFT arm, −Y → RIGHT arm
   link7 target (box.x, box.y, z) + RPY
         │  Pilz LIN
         ▼  /plan_kinematic_path  (service, 1 round-trip)  ─▶  planned JointTrajectory
@@ -24,10 +25,10 @@ action round-trip. Pilz constrains **link7 directly**, so (unlike cyclo) there i
 no link7→hand_tcp offset to compensate.
 
 ## Prerequisites (run separately)
-1. D435 camera (`realsense2_camera`) → `/camera/camera/...`
-2. YOLOv8 DetectBox action server `/yolov8_node/detect`
-3. calibrated base→camera TF
-4. MoveIt `move_group` with the **Pilz pipeline** (`/plan_kinematic_path`) + the
+1. `box_perception_node` — publishes `/detected_boxes` (geometry_msgs/PoseArray,
+   base frame). Detection/3D/box positions are its job (see `3d_detect_ws`); it in
+   turn needs the D435 camera + the YOLOv8 bridge.
+2. MoveIt `move_group` with the **Pilz pipeline** (`/plan_kinematic_path`) + the
    arm JTCs (`/{left,right}_joint_trajectory_controller/joint_trajectory`)
 
 ## Build & run
@@ -55,10 +56,11 @@ ros2 action send_goal /openarmx/pilz_align_to_boxes \
 | `z` | — | link7 target height (absolute, `openarmx_body_link0`), m |
 | `roll_deg`/`pitch_deg`/`yaw_deg` | 180/0/0 | hand orientation (default vertical-down) |
 | `arms` | `both` | `both` \| `left` \| `right` |
-| `confidence` | 0.02 | YOLO confidence (`<=0` keeps default) |
-| `prompts` | box vocab | YOLO-World prompts (empty keeps default) |
+| `confidence` | — | **ignored** (detection is in `box_perception_node`) |
+| `prompts` | — | **ignored** (detection is in `box_perception_node`) |
 | `vel_scale` | 0.3 | Pilz max velocity/accel scaling 0..1 (`<=0` keeps default) |
 | `planner` | `LIN` | Pilz `LIN` \| `PTP` \| `CIRC` |
 
-Detection robustness (accumulate, 3D cluster, `min_hits`, workspace filter,
-stale-frame parking) is shared with the cyclo variant.
+Detection / 3D / workspace filtering now lives in `box_perception_node` (perception),
+shared by both the pilz and cyclo backends. This node only consumes the latest
+`/detected_boxes` (rejected if older than `max_box_age`, default 60 s).

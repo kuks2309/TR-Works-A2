@@ -7,6 +7,23 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-05 06:57 (KST) — 시나리오 GUI HW bringup follower(can2/can3) 전환 + 박스 TF 잔재 제거 + box_align 문서 정리
+
+### 증상 / 배경
+- 시나리오 GUI의 HW bringup이 `can0/can1`(=leader, 텔레옵 입력)을 **고정 사용** → pick 시 leader 팔이 제어됨. 실제 작업팔(follower)은 `can2/can3`. (사용자가 실기에서 leader가 잡히는 것을 확인.)
+- ③(인지/모션 분리)로 box TF 는 `box_perception_node` 가 발행하고 모션 백엔드는 더 이상 box TF 를 안 쓰는데, RViz "Box TFs" TF 디스플레이 + box_align README/package.xml 의 자체검출(DetectBox)·box TF 설명이 잔존.
+
+### 수정
+- **HW bringup CAN → follower can2/can3**: [launch_manager_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/launch_manager_tab.py) L0 "HW 하드웨어", [main_window.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py) `HW_LAUNCH_CMD` 둘 다 right=can2 / left=can3. (can0/can1 = leader.)
+- **RViz "Box TFs" TF 디스플레이 삭제** ([openarmx_scenario.rviz](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/config/openarmx_scenario.rviz)). 박스는 MarkerArray("Detected Boxes")로만 표시. 좌표변환 프레임워크(`Transformation: TF`)는 필수라 유지.
+- **box_align 문서 정리**(pilz/cyclo README + package.xml): 자체검출(DetectBox·N프레임·클러스터·box TF) 설명 → `/detected_boxes` 소비 방식으로. ③로 미사용이 된 의존성(cv_bridge/sensor_msgs/yolov8_detection_msgs) 제거.
+
+### 재발 방지
+- 시나리오 GUI HW bringup 은 follower(can2/can3) 기본. leader(can0/can1)는 텔레옵 입력용. (can 인터페이스: en_all_can.py / `ip link ... bitrate 1000000` 으로 별도 UP, sudo 필요.)
+- 박스 시각화는 `/detected_boxes_markers`(MarkerArray). box `box_<i>` TF 방식은 폐기 — box TF/검출/3D 는 인지(`box_perception_node`) 단일 책임.
+
+---
+
 ## 2026-06-05 01:50 (KST) — ③ 모션 백엔드(pilz·cyclo)를 /detected_boxes 소비로 전환 (인지·모션 완전 분리)
 
 ### 증상 / 배경

@@ -75,7 +75,9 @@ PRESETS = [
         "cmd": ["ros2", "launch", "openarmx_scenario_player",
                 "openarmx_hardware.launch.py", "use_fake_hardware:=false",
                 "control_mode:=mit",
-                "right_can_interface:=can0", "left_can_interface:=can1",
+                # follower 팔 = can2(right)/can3(left). can0/can1 은 leader(텔레옵 입력)라
+                # pick(AlignToBoxes)은 follower 에서 수행해야 한다.
+                "right_can_interface:=can2", "left_can_interface:=can3",
                 "can_fd:=false"],
         "confirm": True,
         "nodes": [],
