@@ -7,6 +7,32 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-04 — Camera 탭(D435+Pi YOLOv8 오버레이) 신설 + cv2/PyQt5 xcb 크래시 + Teaching 2테이블 컬럼 정렬 + 클라우드 TF 브리지
+
+### 증상
+- Camera 탭 추가 직후 GUI 가 startup 에서 즉시 코어덤프: `Could not load the Qt platform plugin "xcb" in ".../cv2/qt/plugins"`.
+- Teaching 탭 상/하 두 QTableWidget 의 컬럼 폭이 서로 다름(name 컬럼이 한쪽은 좁고 한쪽은 넓음).
+- RViz 에서 D435 포인트클라우드 가 안 보임(데이터는 발행 중). box 검출 TF(box_<i>) 도 안 보임.
+
+### 원인
+1. **cv2/PyQt5 충돌**: pip `opencv-python` 이 자체 Qt xcb 플러그인을 번들. `camera_tab.py` 가 모듈 최상위에서 `import cv2` → QApplication 생성 *전* 에 cv2 가 `QT_QPA_PLATFORM_PLUGIN_PATH` 를 가로채 PyQt5 의 xcb 로드 실패 → 코어덤프. (main_window 가 startup 에 camera_tab 을 import 하므로 치명적)
+2. **컬럼 폭 불일치**: 두 테이블 모두 name 컬럼을 `Stretch` 로 둠 → 17열/13열 표의 남는 폭 배분이 달라 name 폭이 크게 어긋남.
+3. **클라우드 안 보임**: `openarmx_body_link0→d435_center_link` 는 URDF(RSP)에 있으나, realsense 는 `camera_link` 루트로 발행 → `d435_center_link→camera_link` 연결이 없어 카메라 TF 트리가 로봇 트리와 분리. 이 identity 브리지는 `scenario_player_with_ee_leader.launch.py`(노드 `d435_center_to_camera_link_tf`)가 발행하는데, 그 스택 미기동 시 누락.
+4. **box TF 안 보임**: 검출 노드 `/yolov8_node`(Pi Hailo 브리지) 미실행 → 박스 인식 자체가 안 됨. (`box_align` 은 인식 후에만, 그것도 AlignToBoxes 액션 중에만 `box_<i>` 를 /tf_static 에 발행)
+
+### 수정
+1. **신규 [camera_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/camera_tab.py)** — D435 라이브 영상(브리지 `sig_image` 구독, show/hide 시 구독/해제) + Pi(10.42.0.2) HTTP POST 워커스레드로 YOLOv8 검출 오버레이(`view_remote_seg.py` 의 draw/request_remote 포팅). `scenario_action_client.py` 에 `sig_image`+`set_image_topic`/`stop_image`/`_on_image`(cv_bridge 지연 import) 추가. main_window 3곳. package.xml 에 cv_bridge/python3-opencv.
+2. **cv2 는 반드시 지연 import**: camera_tab 모듈 최상위 `import cv2` 제거, draw/_render/_worker_loop 내부로 이동(QApplication 이후 import → xcb 이미 로드돼 안전). 브리지의 cv2/cv_bridge 도 지연 import.
+3. **Teaching 컬럼**: name·value 컬럼 모두 두 표 **동일 고정폭** + 끝에 Stretch 스페이서 컬럼(남는 폭 흡수) → 데이터 컬럼 정렬 일치. 선택색은 테이블 레벨 `selection-background-color`.
+4. **클라우드**: `d435_center_link→camera_link` identity 정적 TF 발행하면 체인 복구(검증: body_link0→camera_depth_optical_frame 해석됨). 정식 경로는 scenario 스택.
+
+### 재발 방지
+- PyQt5 앱에서 `import cv2`(opencv-python)는 **QApplication 생성 후** 에만(지연 import). 또는 opencv-python-headless 사용.
+- 두 테이블 정렬은 고정폭+스페이서. name 컬럼 Stretch 는 열 수가 다르면 어긋남.
+- 카메라 RGBD/클라우드가 RViz 에 안 보이면 먼저 `d435_center_link→camera_link` TF 연결(=scenario 스택 또는 정적 TF) 확인. box TF 는 `/yolov8_node` 검출 노드 실행이 전제.
+
+---
+
 ## 2026-06-03 — GUI에서 kill_all 기반 "STOP ALL" 제거 (shm 정리가 살아있는 GUI의 DDS를 깨뜨림)
 
 ### 증상
