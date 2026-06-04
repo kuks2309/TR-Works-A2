@@ -125,10 +125,15 @@ for _i in range(1, 8):
 # HOME: everything at zero.
 HOME_POSITION_DEG = {name: 0.0 for name in ARM_JOINT_NAMES}
 
-# INIT: a mild ready pose (elbow joint4 slightly bent). Adjust to taste.
+# INIT: 등록된 준비 포즈 (현재 위치로 등록, 2026-06-05). joint1/4/7 사용, 나머지 0.
+# 좌우 j1·j7 은 부호 반대(mirror), j4 는 동일.
 INIT_POSITION_DEG = {name: 0.0 for name in ARM_JOINT_NAMES}
-INIT_POSITION_DEG["openarmx_left_joint4"] = 45.0
-INIT_POSITION_DEG["openarmx_right_joint4"] = 45.0
+INIT_POSITION_DEG["openarmx_left_joint1"] = 30.0
+INIT_POSITION_DEG["openarmx_left_joint4"] = 60.0
+INIT_POSITION_DEG["openarmx_left_joint7"] = 30.0
+INIT_POSITION_DEG["openarmx_right_joint1"] = -30.0
+INIT_POSITION_DEG["openarmx_right_joint4"] = 60.0
+INIT_POSITION_DEG["openarmx_right_joint7"] = -30.0
 
 # Gripper presets (meters): fully open.
 HOME_GRIPPER_M = {name: 0.0 for name in GRIPPER_NAMES}
