@@ -25,13 +25,16 @@
       <visual name="${prefix}${name}_visual">
         <xacro:openarmx-body-kinematics config="${kinematics_link}" name="${name}" />
         <geometry>
-          <mesh filename="package://${description_pkg}/meshes/body/${body_type}/visual/${name}.dae" scale="1.0 1.0 1.0" />
+          <mesh filename="package://${description_pkg}/meshes/body/${body_type}/visual/body_link0_1350.stl" scale="0.001 0.001 0.001" />
         </geometry>
+        <material name="body_link0_default">
+          <color rgba="0.30 0.32 0.35 1.0"/>
+        </material>
       </visual>
       <collision name="${prefix}${name}_collision">
         <xacro:openarmx-body-kinematics config="${kinematics_link}" name="${name}" />
         <geometry>
-          <mesh filename="package://openarmx_description/meshes/body/${body_type}/collision/${name}_symp.stl" scale="1.0 1.0 1.0" />
+          <mesh filename="package://openarmx_description/meshes/body/${body_type}/collision/body_link0_1350.stl" scale="0.001 0.001 0.001" />
           <!-- <mesh filename="package://openarmx_description/meshes/arm/${arm_type}/collision/${name}.stl" scale="0.001 0.001 0.001" /> -->
         </geometry>
       </collision>

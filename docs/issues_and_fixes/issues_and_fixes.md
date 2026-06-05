@@ -7,6 +7,82 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-05 17:15 (KST) — a2-scenario(scenario_ui) pinocchio import segfault: numpy 1.x/2.x ABI 충돌
+
+### 증상
+`a2-scenario` 실행 시 scenario_ui 가 시작 중 죽음 (exit code -11, SIGSEGV). 트레이스:
+`scenario_ui.py → main_window → cartesian_control_tab → ik_check.py:19 import pinocchio → /opt/ros/humble/lib/python3.10/site-packages/pinocchio/__init__.py:19 from .pinocchio_pywrap_default import * → AttributeError: _ARRAY_API not found` 후 segfault. 갑자기 발생.
+
+### 원인
+numpy 1.x/2.x ABI(Application Binary Interface) 충돌. apt `ros-humble-pinocchio` 3.9.0 은 numpy 1.x 로 빌드됐는데, `~/.local` 의 numpy 가 **2026-06-05 14:19 에 2.2.6 으로 (재)설치**되어 apt numpy 1.21.5 를 가림(에러 17:12 의 직접 원인). `/opt/ros` 가 `sys.path` 최상단이라 ROS source 여부와 무관하게 항상 numpy-1.x 빌드 pinocchio 가 먼저 import → segfault. **try/except 로 못 잡음**(C 레벨 SIGSEGV, 실측 exit 139). 실측: numpy<2 를 앞세우면 apt pinocchio import·`SE3` 변환·`buildModelFromUrdf` 정상.
+
+- 추가 함정: 2026-06-02 설치된 pip cmeel 스택(pin 3.8.0 / eigenpy 3.12 / placo / cmeel-boost)은 `numpy>=2.2` 요구 → apt pinocchio(numpy<2)와 **단일 전역 numpy 로 동시 만족 불가**. 단 그 스택은 `undefined symbol: EIGENPY_ARRAY_API...` 로 단독 import 불가 + `/opt/ros` 에 가려 미사용 상태라 무시 가능.
+
+### 수정
+`python3 -m pip install --user "numpy<2"` → numpy 1.26.4 설치. **코드 변경 없음(환경만)**. launcher 환경(ROS humble + openarmx_ws install source)에서 import 체인 전체 통과 검증: pinocchio → ik_check → cartesian_control_tab → main_window (exit 0).
+
+- 부수효과: numpy<2 라 `cv_bridge` numpy2 깨짐(imgmsg_to_cv2 bgr8)도 네이티브 해소될 가능성 — 코드는 미변경.
+- 커밋 없음(사용자 지시 "기록만").
+
+### 재발 방지
+
+- `pip install --user` 가 numpy>=2 를 `~/.local` 에 다시 끌어오면 재발(이번이 그 경우). a2-scenario pinocchio segfault 시 **`python3 -c "import numpy; print(numpy.__version__)"` 부터 확인**, 2.x 면 `pip install --user "numpy<2"`.
+- 정공법(우회 아님): apt ROS 스택은 numpy 1.x 전제이므로 전역 numpy 를 1.x 로 유지. numpy 2.x pinocchio 가 필요하면 별도 venv 로 격리(전역 혼용 금지).
+- auto-memory 노트 동기화: `numpy-pinocchio-abi-crash`.
+
+---
+
+## 2026-06-05 10:25 (KST) — pick_and_place 목표 도달 시 gripper open + 고정 sleep → 완료/피드백 기반 대기
+
+### 배경 / 동기
+- 사용자 요청: `openarmx_ws/src/pick_and_place` 의 box_align(cyclo·pilz) 백엔드가 **목표 지점 도달 시 gripper 를 open** 하도록.
+- 후속 논의로 두 백엔드가 이동 후 **고정 `time.sleep(예상시간)`** 으로 대기하는 구조의 비효율을 규명: 모션을 *토픽 발행(fire-and-forget)* 으로 명령해 **컨트롤러로부터 완료 신호가 돌아오지 않기 때문**. 도달 검증(`err_mm`)·gripper open 시점을 맞추려 운동 예상시간을 시간으로 때움.
+  - cyclo MoveL 컨트롤러: 종료 시 내부 플래그만 끄고 완료 토픽/액션 없음 ([omx_movel_controller_node.cpp](../../openarmx_ws/src/cyclo_robot_controller/cyclo_motion_controller_ros/src/nodes/omx/omx_movel_controller_node.cpp) L326).
+  - pilz: JTC(Joint Trajectory Controller) 의 `follow_joint_trajectory` 액션(완료 result 제공)이 아니라 `joint_trajectory` *토픽* 으로 발행 → 완료 신호 폐기.
+
+### 수정
+- **gripper open (cyclo·pilz 공통)**: 도달 직후 배정 팔의 GripperActionController(`control_msgs/GripperCommand`, `/{side}_gripper_controller/gripper_cmd`) 로 open. finger joint 범위 0.0(닫힘)~0.044m(완전 열림), 파라미터 `gripper_open_pos`(0.044)·`gripper_effort`(14.0), 결과는 `assignments_json` 에 기록. `control_msgs` 의존성 추가(두 package.xml).
+- **pilz — 완료 신호 기반 대기** ([pilz_box_align_node.py](../../openarmx_ws/src/pick_and_place/pilz/openarmx_pilz_box_align/openarmx_pilz_box_align/pilz_box_align_node.py)): trajectory 를 `follow_joint_trajectory` **액션**으로 전송(`_send_traj`)하고 result 까지 대기 → 고정 sleep 제거. 액션 부재 시 `joint_trajectory` 토픽 + 시간 보정으로 안전 폴백.
+- **cyclo — ee_pose 피드백 기반 도달 대기** ([box_align_node.py](../../openarmx_ws/src/pick_and_place/cyclo/openarmx_cyclo_box_align/openarmx_cyclo_box_align/box_align_node.py)): 컨트롤러가 발행하는 `/openarmx/{side}/ee_pose`(엔드이펙터(end-effector) 포즈, base frame) 를 구독해 명령 `tcp_target` 과의 거리가 `arrive_tol_m`(기본 5mm) 안에 들면 도달로 판정(`_wait_until_arrived`) → 고정 sleep 제거. 미수신/미수렴 시 `move_time+1.0` 까지 대기 = 기존 동작 폴백. 파라미터 `arrive_tol_m`·`ee_pose_topic_template`.
+- 명령 경로(cyclo MoveL 토픽 발행)는 불변 — "대기"만 피드백 기반으로 교체해 검증된 0mm 동작 보존.
+
+### 검증
+- `py_compile` 양호, flake8(max-line 99) 새 코드 위반 0. (cyclo 176–177 E501 2건은 기존 `move_arm` 좌표 대입 라인, 본 변경 아님.)
+- **미완**: `colcon build` + 실기/시뮬 `AlignToBoxes` 실동작 검증(ee_pose 실수신·수렴, pilz 액션 result 도달) 대기.
+
+### 재발 방지
+- 모션을 *토픽*(fire-and-forget)으로 명령하면 완료 신호가 없어 고정 sleep 에 의존하게 됨. 완료 result 를 주는 **액션**(JTC(Joint Trajectory Controller) `follow_joint_trajectory`) 또는 컨트롤러 피드백(`ee_pose`)·TF(Transform) 수렴 판정으로 대기를 대체할 것.
+- cyclo MoveL 컨트롤러에 완료 신호(액션/done 토픽)가 없는 한, 백엔드는 피드백 수렴으로 도달을 판정한다.
+
+---
+
+## 2026-06-05 07:20 (KST) — 시나리오 GUI 느림 + Teaching Capture 안 됨 종합 분석(py-spy) — 두 원인 규명
+
+### 증상
+- GUI 전반이 매우 느림(클릭/렌더 끊김). Teaching 탭 "Capture" 로 현재 포즈가 등록 안 됨("현재 포인트 등록이 안됩니다"). /joint_states·EE(End Effector) TF(Transform)(양팔 link0→link7)는 라이브 정상 — Capture 의 조기반환(조인트 미수신/TF(Transform) lookup 실패)은 원인 아님.
+
+### 분석 (py-spy 정량, 10s/3998 samples)
+`scenario_ui` 한 코어 ~87% 지속 점유. 느림은 **독립적인 두 원인**:
+
+**원인 A — GUI(메인) 스레드가 블로킹 subprocess 로 주기적으로 얼어붙음** (2초 QTimer 2곳):
+- [launch_manager_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/launch_manager_tab.py) `_refresh`: `ros2 node list`(timeout 4s, **샘플 1101개=최다**) + 프리셋 8개마다 `pgrep -f`.
+- [pick_and_place_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/pick_and_place_tab.py) `_refresh_status`: `pgrep -f` ×3 (`_proc_running_external`).
+- 메인 스레드를 8회 샘플 시 4/8 이 `subprocess.communicate` 에서 frozen. GUI 가 매 2초 큰 비율 멈춤 → 클릭/모달 입력(Capture "Pose 이름") 유실.
+
+**원인 B — executor(단일 rclpy 스레드)가 고빈도 토픽을 파이썬에서 역직렬화하며 한 코어 점유 → GIL 경합으로 GUI 굶음**:
+- 프로파일 핫: `_take_subscription`(368, 역직렬화), `_wait_for_ready_callbacks`/`add_to_wait_set`(매 spin_once 마다 wait set 재구성, 구독 수에 비례), `control_msgs InterfaceValue` 디코드(`/dynamic_joint_states`).
+- `_setup_diagnostics()` 가 `__init__` 에서 **항상** 14개 토픽 구독(Pipe Health 탭 안 봐도). 실측: **/joint_states 100 Hz**(피드백+diagnostics 로 **중복 구독** → ~200 cb/s), /dynamic_joint_states(역직렬화 비쌈, 레이트 표시 용도뿐), /tf 17 Hz, ee_pose ×2. (D435 미스트리밍이라 이미지 구독은 현재 병목 아님.)
+
+### 수정
+- **원인 A (완료, subprocess 를 GUI 스레드에서 제거)**: `_query_nodes` → 브리지 인프로세스 `live_node_names()`(rclpy 그래프 API). `_proc_running`/`_proc_running_external` → `/proc` 1회 스캔(`_running_cmdlines`, ~10ms) 재사용·부분문자열 매칭(`pgrep -f re.escape` 동치). [main_window.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py) 에서 `LaunchManagerTab(self._bridge,…)` 주입. 잔여 `subprocess.run` 은 Stop/kill 일회성(타이머 아님). symlink-install — **UI 재기동 시 적용**.
+- **원인 B (제안, 미적용)**: diagnostics 구독을 lazy 화(Pipe Health 탭 활성 시에만 구독/해제), /joint_states 중복 구독 제거(피드백 sub 의 레이트 재사용), /dynamic_joint_states 역직렬화 회피. → 사용자 승인 후 진행.
+
+### 재발 방지
+- PyQt GUI 스레드(슬롯/QTimer 콜백)에서 블로킹 `subprocess.run` 금지(`ros2 node list`·`pgrep` 0.5~수초). ROS 그래프=인프로세스 rclpy API, 프로세스 조회=`/proc` 스캔, 불가피하면 백그라운드 QThread+시그널.
+- 항상-구독은 꼭 필요한 토픽만. 고빈도(≥50Hz)·무거운 메시지(DynamicJointState/Image)는 보이는 탭에서만 구독하거나 별 executor/콜백그룹 분리 검토.
+
+---
+
 ## 2026-06-05 06:57 (KST) — 시나리오 GUI HW bringup follower(can2/can3) 전환 + 박스 TF 잔재 제거 + box_align 문서 정리
 
 ### 증상 / 배경

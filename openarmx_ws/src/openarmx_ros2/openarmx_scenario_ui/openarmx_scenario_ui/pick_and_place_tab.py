@@ -18,6 +18,7 @@ MoveIt Pilz)의 ``AlignToBoxes`` 액션 골을 보내 박스를 감지→좌/우
 
 from __future__ import annotations
 
+import os
 import subprocess
 from datetime import datetime
 
@@ -423,7 +424,8 @@ class PickAndPlaceTab(QWidget):
         if self._cam_proc.running:
             self._set_status("D435 카메라: 이미 실행 중(이 탭).")
             return
-        if self._proc_running_external("realsense2_camera"):
+        if self._proc_running_external("realsense2_camera",
+                                       self._running_cmdlines()):
             self._set_status("D435 카메라가 외부에서 이미 실행 중 — 중복 방지(먼저 Stop).")
             return
         if self._cam_proc.start(D435_CMD):
@@ -466,7 +468,9 @@ class PickAndPlaceTab(QWidget):
         return ["bash", "-c", inner]
 
     def _request_detect(self) -> None:
-        if not (self._det_proc.running or self._proc_running_external(EXT_DETECT)):
+        if not (self._det_proc.running
+                or self._proc_running_external(EXT_DETECT,
+                                               self._running_cmdlines())):
             self._set_status("원격검출 브리지가 꺼져 있음 — 먼저 '원격검출 브리지(Pi) Start'.")
             return
         if self._detreq_proc.state() != QProcess.NotRunning:
@@ -504,19 +508,39 @@ class PickAndPlaceTab(QWidget):
 
     # ----------------------------------------------------------- status poll
     @staticmethod
-    def _proc_running_external(pattern: str) -> bool:
+    def _running_cmdlines() -> list:
+        """Snapshot every process command line via one /proc read (no
+        subprocess). Replaces per-pattern `pgrep -f`, which blocked the GUI
+        thread on the 2 s status timer. A substring test reproduces
+        `pgrep -f`'s literal-match semantics.
+        """
+        cmds = []
         try:
-            r = subprocess.run(["pgrep", "-f", pattern],
-                               capture_output=True, text=True, timeout=3)
-            return r.returncode == 0 and bool(r.stdout.strip())
-        except Exception:
-            return False
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        raw = f.read()
+                except OSError:
+                    continue
+                if raw:
+                    cmds.append(
+                        raw.replace(b"\x00", b" ").decode("utf-8", "replace"))
+        except OSError:
+            pass
+        return cmds
 
-    def _set_run_label(self, lbl: QLabel, managed, ext_pattern: str) -> None:
+    @staticmethod
+    def _proc_running_external(pattern: str, cmdlines: list) -> bool:
+        return any(pattern in c for c in cmdlines)
+
+    def _set_run_label(self, lbl: QLabel, managed, ext_pattern: str,
+                       cmdlines: list) -> None:
         if managed.running:
             lbl.setText("● Running (this tab)")
             lbl.setStyleSheet("color:#080; font-weight:bold;")
-        elif self._proc_running_external(ext_pattern):
+        elif self._proc_running_external(ext_pattern, cmdlines):
             lbl.setText("● Running (external)")
             lbl.setStyleSheet("color:#d80;")
         else:
@@ -524,9 +548,12 @@ class PickAndPlaceTab(QWidget):
             lbl.setStyleSheet("color:gray;")
 
     def _refresh_status(self) -> None:
-        self._set_run_label(self._lbl_cam, self._cam_proc, "realsense2_camera")
-        self._set_run_label(self._lbl_det, self._det_proc, EXT_DETECT)
-        self._set_run_label(self._lbl_be, self._backend_proc, BACKEND_EXT[self._backend_key()])
+        cmdlines = self._running_cmdlines()
+        self._set_run_label(self._lbl_cam, self._cam_proc,
+                            "realsense2_camera", cmdlines)
+        self._set_run_label(self._lbl_det, self._det_proc, EXT_DETECT, cmdlines)
+        self._set_run_label(self._lbl_be, self._backend_proc,
+                            BACKEND_EXT[self._backend_key()], cmdlines)
 
     # --------------------------------------------------------------- process
     def _on_output(self) -> None:

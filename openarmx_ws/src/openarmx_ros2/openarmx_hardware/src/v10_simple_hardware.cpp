@@ -169,8 +169,13 @@ hardware_interface::CallbackReturn OpenArmX_v10HW::on_init(
 
   // Initialize KP and KD values with defaults
   // 注意：第8个值是夹爪，增大KP/KD可提高响应速度和阻尼
-  kp_values_ = {50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 50.0};  // 夹爪KP从10.0改为50.0
-  kd_values_ = {2.5, 2.5, 2.5, 2.5, 0.5, 0.5, 0.5, 2.5};          // 夹爪KD从0.5改为2.5（与大关节相同）
+  // [JSY] calibrated 2026-06-05 from follower RIGHT+LEFT arms (can2/can3) via joint_gain_tuner.py.
+  //       Original defaults: kp {50,50,50,50,10,10,10,50}  kd {2.5,2.5,2.5,2.5,0.5,0.5,0.5,2.5}
+  //       Unified KP=170 for all arm joints j1..j7 (serves both arms); KD=2.5; 8th=gripper unchanged.
+  //       (sweep optimum was 200; lowered to 170 on request — still 0% overshoot, sse ~+18%.)
+  //       (left joint2 measured with -delta due to mirrored limits; floor ~10.5 mrad.)
+  kp_values_ = {170.0, 170.0, 170.0, 170.0, 170.0, 170.0, 170.0, 50.0};  // all arm joints=170; 夹爪=50
+  kd_values_ = {2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5};                  // j5~7 raised 0.5->2.5; 夹爪=2.5
 
   // Declare ROS2 parameters for KP and KD
   for (size_t i = 0; i < kp_values_.size(); ++i) {

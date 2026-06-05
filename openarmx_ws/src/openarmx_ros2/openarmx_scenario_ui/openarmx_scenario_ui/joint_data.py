@@ -128,12 +128,12 @@ HOME_POSITION_DEG = {name: 0.0 for name in ARM_JOINT_NAMES}
 # INIT: 등록된 준비 포즈 (현재 위치로 등록, 2026-06-05). joint1/4/7 사용, 나머지 0.
 # 좌우 j1·j7 은 부호 반대(mirror), j4 는 동일.
 INIT_POSITION_DEG = {name: 0.0 for name in ARM_JOINT_NAMES}
-INIT_POSITION_DEG["openarmx_left_joint1"] = 30.0
-INIT_POSITION_DEG["openarmx_left_joint4"] = 60.0
-INIT_POSITION_DEG["openarmx_left_joint7"] = 30.0
-INIT_POSITION_DEG["openarmx_right_joint1"] = -30.0
-INIT_POSITION_DEG["openarmx_right_joint4"] = 60.0
-INIT_POSITION_DEG["openarmx_right_joint7"] = -30.0
+INIT_POSITION_DEG["openarmx_left_joint1"] = 50.0
+INIT_POSITION_DEG["openarmx_left_joint4"] = 100.0
+INIT_POSITION_DEG["openarmx_left_joint7"] = 50.0
+INIT_POSITION_DEG["openarmx_right_joint1"] = -50.0
+INIT_POSITION_DEG["openarmx_right_joint4"] = 100.0
+INIT_POSITION_DEG["openarmx_right_joint7"] = -50.0
 
 # Gripper presets (meters). INIT 도 현재 포즈(닫힘 0.0)로 등록.
 HOME_GRIPPER_M = {name: 0.0 for name in GRIPPER_NAMES}

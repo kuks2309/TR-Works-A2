@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-06-05 21:55 KST — numpy/pinocchio 크래시 + RViz 표시·UI 부하 진단 + D435 라즈베리파이 오프로드 논의
+
+> "갑자기 오류" (이어서 a2-scenario pinocchio import segfault 터미널 로그 첨부)
+
+> "ds435 cloud point가 안보이는데"
+
+> "로봇 도 안보이는데  capture_test skill  사용해서 rviz capture gkf rjt"
+
+> "현재 ui 가 매우 느린데..."
+
+> "2번 종료"
+
+> "ds435를 라즈베리파이에서 처리하고 이미지와 클라우드 데이트를 통신으로 받는 것은 어떤지?"
+
+> "기록만"
+
+---
+
+## 2026-06-05 07:27 KST — pick_and_place 목표 도달 시 gripper open + 고정 sleep → 완료/피드백 기반 대기
+
+> "폴더 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/pick_and_place 에서 목표 지점 도달시 gripper가 open 되도록 해주세요."
+
+> "완료 신호를 서버가 주지 않나요? 도달할 경우 action server에서 도달 명령을 주는 것으로 암"
+
+> "기록후에 진행해 주세요."
+
+---
+
 ## 2026-06-05 07:02 KST — 약어 검사 Stop 훅 + 잔여 변경 커밋/푸쉬 + kuks_claude_setup 업로드
 
 > "기록.. 깃 허브 커밋 푸쉬 완료할 것"

@@ -15,6 +15,7 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>openarmx_scenario_player_msgs</exec_depend>
   <exec_depend>openarmx_cyclo_box_align_msgs</exec_depend>

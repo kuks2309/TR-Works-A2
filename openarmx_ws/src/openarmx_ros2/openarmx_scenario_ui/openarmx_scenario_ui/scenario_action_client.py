@@ -145,6 +145,9 @@ class ScenarioRosBridge(QObject):
 
     def _spin_loop(self) -> None:
         while not self._stop_event.is_set():
+            # Create/destroy lazy diagnostics subscriptions on THIS (executor)
+            # thread so rclpy entities are never mutated during spin_once().
+            self._apply_diag_pending()
             try:
                 self._executor.spin_once(timeout_sec=0.1)
             except Exception as e:
@@ -293,6 +296,13 @@ class ScenarioRosBridge(QObject):
         self._last_self_publish = None
 
     def _on_joint_state(self, msg: JointState) -> None:
+        # Diagnostics rate counter for /joint_states piggybacks here (every
+        # received message, before the echo filter) so we don't subscribe to
+        # this 100 Hz topic a second time just to count it.
+        d = self._diag.get(self._DIAG_PIGGYBACK)
+        if d is not None:
+            d["count"] += 1
+            d["last"] = time.monotonic()
         # Drop echoes of our own SIL publish to avoid a feedback loop.
         if self._last_self_publish:
             checked = [(n, p) for n, p in zip(msg.name, msg.position)
@@ -391,11 +401,27 @@ class ScenarioRosBridge(QObject):
     # Diagnostics tab — node liveness + topic publish-rate monitoring
     # ==================================================================
 
+    # Topic whose rate is counted by piggybacking the existing 100 Hz feedback
+    # callback (_on_joint_state) instead of a SECOND subscription — /joint_states
+    # was being deserialized twice (feedback + diagnostics), the single largest
+    # executor load.
+    _DIAG_PIGGYBACK = "/joint_states"
+
     def _setup_diagnostics(self) -> None:
+        """Prepare diagnostics rate-counting WITHOUT subscribing.
+
+        The 14 rate-monitor subscriptions exist only to feed the Pipe Health
+        tab. Subscribing to them all at startup kept the single rclpy executor
+        deserialising /dynamic_joint_states, /tf, ee_pose, … forever (≈87 % of a
+        core) even when that tab was not open, starving the GUI thread via the
+        GIL. So we build the counter table here but create the actual
+        subscriptions lazily (diag_start/diag_stop), and never subscribe to
+        /joint_states twice (its counter is bumped from _on_joint_state).
+        """
         from openarmx_scenario_ui import diagnostics_spec as ds
         self._diag = {}                      # topic -> {"count": int, "last": float}
         self._diag_t0 = time.monotonic()
-        qos_map = {
+        self._diag_qos = {
             ds.QOS_SENSOR: QoSProfile(
                 depth=10, reliability=QoSReliabilityPolicy.BEST_EFFORT,
                 durability=QoSDurabilityPolicy.VOLATILE),
@@ -406,15 +432,56 @@ class ScenarioRosBridge(QObject):
                 depth=10, reliability=QoSReliabilityPolicy.RELIABLE,
                 durability=QoSDurabilityPolicy.VOLATILE),
         }
+        # Topics to create on demand (everything except the piggybacked one).
+        self._diag_lazy_specs = []
         for _cat, topic, mtype, qkind, _kind, _detail in ds.TOPIC_SPECS:
             self._diag[topic] = {"count": 0, "last": 0.0}
+            if topic != self._DIAG_PIGGYBACK:
+                self._diag_lazy_specs.append((topic, mtype, qkind))
+        self._diag_subs = {}                 # topic -> subscription handle
+        self._diag_active = False            # subscriptions currently created?
+        self._diag_pending = None            # None | True(start) | False(stop)
+        self._diag_lock = threading.Lock()
 
-            def _cb(_msg, t=topic):
-                d = self._diag[t]
-                d["count"] += 1
-                d["last"] = time.monotonic()
+    # ---- lazy diagnostics subscription lifecycle ----
+    # diag_start/diag_stop run on the GUI thread; they only flag intent. The
+    # actual create/destroy happens on the spin thread (_apply_diag_pending) so
+    # rclpy entities are never mutated concurrently with spin_once().
 
-            self._node.create_subscription(mtype, topic, _cb, qos_map[qkind])
+    def diag_start(self) -> None:
+        with self._diag_lock:
+            self._diag_pending = True
+
+    def diag_stop(self) -> None:
+        with self._diag_lock:
+            self._diag_pending = False
+
+    def _apply_diag_pending(self) -> None:
+        with self._diag_lock:
+            want = self._diag_pending
+            self._diag_pending = None
+        if want is None or want == self._diag_active:
+            return
+        if want:
+            for topic, mtype, qkind in self._diag_lazy_specs:
+                def _cb(_msg, t=topic):
+                    d = self._diag[t]
+                    d["count"] += 1
+                    d["last"] = time.monotonic()
+                self._diag_subs[topic] = self._node.create_subscription(
+                    mtype, topic, _cb, self._diag_qos[qkind])
+            # Fresh measurement window so the first read is not skewed.
+            for d in self._diag.values():
+                d["count"] = 0
+            self._diag_t0 = time.monotonic()
+        else:
+            for sub in self._diag_subs.values():
+                try:
+                    self._node.destroy_subscription(sub)
+                except Exception:
+                    pass
+            self._diag_subs.clear()
+        self._diag_active = want
 
     def diag_consume_rates(self) -> dict:
         """Return {topic: {hz, age}} measured since the last call, then reset."""

@@ -1,0 +1,7 @@
+{
+  "name": "teach_seq",
+  "description": "Taught via Teaching tab",
+  "sequence": [
+    "main"
+  ]
+}

@@ -134,7 +134,7 @@ class ScenarioMainWindow(QMainWindow):
         self._tabs.addTab(self._pnp_tab, "Pick and Place")
         self._camera_tab = CameraTab(self._bridge, parent=self)
         self._tabs.addTab(self._camera_tab, "Camera")
-        self._launch_tab = LaunchManagerTab(parent=self)
+        self._launch_tab = LaunchManagerTab(self._bridge, parent=self)
         self._tabs.addTab(self._launch_tab, "Launch Manager")
         # Diagnostics split into two focused tabs (same DiagnosticsTab widget,
         # filtered): Node Health = node alive/down + raw node list;

@@ -10,18 +10,22 @@ On an ``AlignToBoxes`` goal it:
   2. assigning     -- +Y 박스는 LEFT, -Y 박스는 RIGHT 팔에 배정(goal.arms 반영).
   3. moving        -- 팔마다 link7 target (box.x, box.y, z) 를 만들고 고정
      link7->hand_tcp 오프셋을 보정해 ``/openarmx/<side>/movel`` 로 MoveL 발행.
+     이후 컨트롤러가 내는 ee_pose 가 명령 tcp_target 의 arrive_tol_m 안에 들면
+     도달로 보고(고정 sleep 없음), 도달한 팔의 gripper 를 연다.
 
 전제 노드: box_perception_node(/detected_boxes), cyclo MoveL 컨트롤러
 (/openarmx/{left,right}/movel). 검출/3D 변환/박스 TF 는 인지 책임 — 본 노드엔 없다.
 """
 import json
 import math
+import threading
 import time
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseArray
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from control_msgs.action import GripperCommand
+from geometry_msgs.msg import PoseArray, PoseStamped
+from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -62,9 +66,20 @@ class BoxAlignNode(Node):
         self.declare_parameter("move_time", 6.0)
         self.declare_parameter("detected_boxes_topic", "/detected_boxes")
         self.declare_parameter("max_box_age", 60.0)
+        # 목표 도달 시 gripper open: finger joint 범위 0.0(닫힘)~0.044m(완전 열림).
+        self.declare_parameter("gripper_open_pos", 0.044)
+        self.declare_parameter("gripper_effort", 14.0)
+        # 고정 sleep 대신 ee_pose 피드백 기반 도달 대기: 컨트롤러가 발행하는 EE
+        # 포즈가 명령한 tcp_target 의 arrive_tol_m(미터) 안에 들면 도달로 본다.
+        self.declare_parameter("arrive_tol_m", 0.005)
+        self.declare_parameter("ee_pose_topic_template", "/openarmx/{side}/ee_pose")
         gp = self.get_parameter
         self.move_time = float(gp("move_time").value)
         self.max_age = float(gp("max_box_age").value)
+        self.gripper_open_pos = float(gp("gripper_open_pos").value)
+        self.gripper_effort = float(gp("gripper_effort").value)
+        self.arrive_tol = float(gp("arrive_tol_m").value)
+        ee_tmpl = str(gp("ee_pose_topic_template").value)
 
         cb = ReentrantCallbackGroup()
         self.tf_buffer = Buffer()
@@ -83,6 +98,22 @@ class BoxAlignNode(Node):
             "left": self.create_publisher(MoveL, "/openarmx/left/movel", 10),
             "right": self.create_publisher(MoveL, "/openarmx/right/movel", 10),
         }
+        # 목표 도달 후 여는 GripperActionController (control_msgs/GripperCommand).
+        self.grip_client = {
+            "left": ActionClient(
+                self, GripperCommand, "/left_gripper_controller/gripper_cmd",
+                callback_group=cb),
+            "right": ActionClient(
+                self, GripperCommand, "/right_gripper_controller/gripper_cmd",
+                callback_group=cb),
+        }
+        # 컨트롤러가 발행하는 현재 EE(hand_tcp) 포즈 — 도달 판정용(완료 신호 대용).
+        self._ee_pose = {"left": None, "right": None}
+        for side in ("left", "right"):
+            self.create_subscription(
+                PoseStamped, ee_tmpl.format(side=side),
+                lambda msg, s=side: self._on_ee_pose(s, msg), 10,
+                callback_group=cb)
         self.srv = ActionServer(
             self, AlignToBoxes, "/openarmx/align_to_boxes",
             execute_callback=self._execute,
@@ -96,6 +127,10 @@ class BoxAlignNode(Node):
     def _on_boxes(self, msg):
         self._boxes = list(msg.poses)
         self._boxes_t = self.get_clock().now()
+
+    def _on_ee_pose(self, side, msg):
+        p = msg.pose.position
+        self._ee_pose[side] = [p.x, p.y, p.z]
 
     def _current_boxes(self):
         """최신 /detected_boxes -> [{base:[x,y,z]}], max_box_age 이내만 유효."""
@@ -122,7 +157,9 @@ class BoxAlignNode(Node):
     # ----------------------------------------------------------------- move
     def move_arm(self, side, box_base, z, quat):
         """Command <side> arm so link7 reaches (box.x, box.y, z) with orientation
-        quat. Compensates the fixed link7->hand_tcp offset (cyclo controls tcp)."""
+        quat. Compensates the fixed link7->hand_tcp offset (cyclo controls tcp).
+        Returns (link7_target, tcp_target) — tcp_target is the EE goal we command,
+        used to judge arrival against the controller's ee_pose feedback."""
         link7 = f"openarmx_{side}_link7"
         tcp = f"openarmx_{side}_hand_tcp"
         off = self._tf(link7, tcp)            # fixed link7 -> hand_tcp transform
@@ -141,13 +178,77 @@ class BoxAlignNode(Node):
         m.time_from_start.sec = int(self.move_time)
         m.time_from_start.nanosec = int((self.move_time % 1.0) * 1e9)
         self.movel_pub[side].publish(m)
-        return link7_target.tolist()
+        return link7_target.tolist(), tcp_pos.tolist()
 
     def link7_pos(self, side):
         tf = self._tf(BASE, f"openarmx_{side}_link7", timeout=1.0)
         if tf is None:
             return None
         return [tf.translation.x, tf.translation.y, tf.translation.z]
+
+    # ----------------------------------------------------------------- arrival
+    def _wait_until_arrived(self, assigned, report, timeout):
+        """Wait until each assigned arm's ee_pose (controller feedback) is within
+        arrive_tol of its tcp_target, or until timeout. Replaces a blind fixed sleep
+        so verification/gripper happen at real arrival. ee_pose 미수신/미수렴 시에는
+        timeout 까지 대기(기존 동작으로 안전 폴백). Records per-side 'wait'."""
+        pending = set(assigned.keys())
+        t0 = time.time()
+        while pending and rclpy.ok() and time.time() - t0 < timeout:
+            for side in list(pending):
+                ee = self._ee_pose.get(side)
+                if ee is None:
+                    continue
+                tgt = report[side]["tcp_target"]
+                err = math.sqrt(sum((ee[i] - tgt[i]) ** 2 for i in range(3)))
+                if err <= self.arrive_tol:
+                    report[side]["wait"] = "arrived"
+                    pending.discard(side)
+            if pending:
+                time.sleep(0.05)
+        for side in pending:
+            report[side].setdefault("wait", "timeout")
+
+    # ---------------------------------------------------------------- gripper
+    def open_gripper(self, side):
+        """Open the <side> gripper via GripperActionController; blocks until result.
+        Returns "" on success or an error string (MultiThreadedExecutor-safe)."""
+        client = self.grip_client.get(side)
+        if client is None:
+            return f"unknown gripper side {side!r}"
+        if not client.wait_for_server(timeout_sec=3.0):
+            return f"{side} gripper action unavailable"
+        goal = GripperCommand.Goal()
+        goal.command.position = self.gripper_open_pos
+        goal.command.max_effort = self.gripper_effort
+        done = threading.Event()
+        box = {"err": ""}
+
+        def on_result(fut):
+            try:
+                fut.result()
+            except Exception as e:
+                box["err"] = str(e)
+            finally:
+                done.set()
+
+        def on_response(fut):
+            try:
+                gh = fut.result()
+            except Exception as e:
+                box["err"] = str(e)
+                done.set()
+                return
+            if not gh.accepted:
+                box["err"] = "goal rejected"
+                done.set()
+                return
+            gh.get_result_async().add_done_callback(on_result)
+
+        client.send_goal_async(goal).add_done_callback(on_response)
+        if not done.wait(timeout=10.0):
+            return f"{side} gripper open timeout"
+        return box["err"]
 
     # -------------------------------------------------------------- execute
     def _fb(self, gh, phase, prog):
@@ -188,9 +289,11 @@ class BoxAlignNode(Node):
         self._fb(gh, "moving", 0.6)
         report = {}
         for side, b in assigned.items():
-            tgt = self.move_arm(side, b["base"], goal.z, quat)
-            report[side] = {"box_base": b["base"], "link7_target": tgt}
-        time.sleep(self.move_time + 1.0)
+            tgt, tcp_tgt = self.move_arm(side, b["base"], goal.z, quat)
+            report[side] = {"box_base": b["base"], "link7_target": tgt, "tcp_target": tcp_tgt}
+        # ee_pose 피드백으로 실제 도달까지 대기(고정 sleep 대체). 미수신/미수렴 시
+        # move_time+1.0 까지 대기 = 기존 동작으로 안전 폴백.
+        self._wait_until_arrived(assigned, report, timeout=self.move_time + 1.0)
         for side in assigned:
             cur = self.link7_pos(side)
             if cur is not None:
@@ -198,6 +301,14 @@ class BoxAlignNode(Node):
                 err = math.sqrt(sum((cur[i] - tgt[i]) ** 2 for i in range(3)))
                 report[side]["link7_final"] = cur
                 report[side]["err_mm"] = round(err * 1000, 1)
+
+        # 목표 지점 도달 -> 배정된 팔의 gripper open.
+        self._fb(gh, "opening_gripper", 0.9)
+        for side in assigned:
+            gerr = self.open_gripper(side)
+            report[side]["gripper"] = "open" if not gerr else f"open_failed: {gerr}"
+            if gerr:
+                self.get_logger().warning(f"{side} gripper open: {gerr}")
 
         self._fb(gh, "done", 1.0)
         gh.succeed()

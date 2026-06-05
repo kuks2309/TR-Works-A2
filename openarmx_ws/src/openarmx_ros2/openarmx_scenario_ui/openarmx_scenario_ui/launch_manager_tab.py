@@ -179,8 +179,13 @@ CUSTOM_KEY = "custom"
 
 
 class LaunchManagerTab(QWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, bridge=None, parent=None) -> None:
         super().__init__(parent)
+        # In-process ROS bridge — lets node discovery use the rclpy graph API
+        # instead of a blocking `ros2 node list` subprocess (which froze the
+        # whole GUI ~50% of the time on the 2 s refresh timer). Optional so the
+        # tab still constructs standalone (falls back to subprocess).
+        self._bridge = bridge
         self._procs = {p["key"]: ManagedProcess(f"launch_{p['key']}") for p in PRESETS}
         self._procs[CUSTOM_KEY] = ManagedProcess("launch_custom")
         self._rows = {}          # key -> (start_btn, stop_btn, status_lbl)
@@ -304,7 +309,19 @@ class LaunchManagerTab(QWidget):
     # ------------------------------------------------------------------
 
     def _query_nodes(self) -> list:
-        """Snapshot of `ros2 node list` (best-effort, short timeout)."""
+        """Snapshot of live ROS2 node names.
+
+        Uses the in-process rclpy graph (`bridge.live_node_names()`) so the
+        2 s status refresh never spawns/blocks on a `ros2 node list`
+        subprocess (the cause of the GUI freezing ~50% of the time, which made
+        modal dialogs like Teaching-tab Capture unresponsive). Falls back to
+        the subprocess only when no bridge is available.
+        """
+        if self._bridge is not None:
+            try:
+                return sorted(self._bridge.live_node_names())
+            except Exception:
+                pass
         try:
             r = subprocess.run(["ros2", "node", "list"],
                                capture_output=True, text=True, timeout=4)
@@ -312,24 +329,53 @@ class LaunchManagerTab(QWidget):
         except Exception:
             return []
 
-    def _proc_running(self, pattern: str) -> bool:
-        # Escape regex metacharacters so dots/dashes match literally
-        # (pgrep -f treats the pattern as an extended regex).
-        literal = re.escape(pattern)
-        try:
-            r = subprocess.run(["pgrep", "-f", literal],
-                               capture_output=True, text=True, timeout=3)
-            return r.returncode == 0 and bool(r.stdout.strip())
-        except Exception:
-            return False
+    @staticmethod
+    def _running_cmdlines() -> list:
+        """Snapshot every process's full command line by reading /proc once.
 
-    def _detect_external(self, preset: dict) -> bool:
-        """True if this target appears to be running anywhere on the system."""
+        Replaces the per-pattern `pgrep -f` subprocesses (which blocked the GUI
+        thread): one in-process scan is reused for all preset patterns. Each
+        cmdline is the NUL-joined argv flattened to a space-separated string,
+        matching what `pgrep -f` sees.
+        """
+        cmds = []
+        try:
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        raw = f.read()
+                except OSError:
+                    continue
+                if raw:
+                    cmds.append(
+                        raw.replace(b"\x00", b" ").decode("utf-8", "replace"))
+        except OSError:
+            pass
+        return cmds
+
+    @staticmethod
+    def _proc_running(pattern: str, cmdlines: list) -> bool:
+        """True if `pattern` occurs in any process command line.
+
+        `pgrep -f re.escape(pattern)` is a literal-substring match over the
+        full cmdline, so a plain substring test reproduces it exactly without
+        spawning a subprocess.
+        """
+        return any(pattern in c for c in cmdlines)
+
+    def _detect_external(self, preset: dict, cmdlines: list) -> bool:
+        """True if this target appears to be running anywhere on the system.
+
+        `cmdlines` is a single /proc snapshot (see _running_cmdlines) reused
+        across all presets in one refresh pass.
+        """
         for node in preset.get("nodes", []):
             if any(node == n or n.endswith(node) for n in self._node_cache):
                 return True
         for pat in preset.get("procs", []):
-            if self._proc_running(pat):
+            if self._proc_running(pat, cmdlines):
                 return True
         return False
 
@@ -349,7 +395,7 @@ class LaunchManagerTab(QWidget):
 
         # Duplicate detection: same launch/node already up elsewhere?
         self._node_cache = self._query_nodes()
-        if self._detect_external(preset):
+        if self._detect_external(preset, self._running_cmdlines()):
             ans = QMessageBox.question(
                 self, "이미 실행 중",
                 f"'{preset['label']}' 와(과) 동일한 launch/노드가 이미 실행 중인 것으로 "
@@ -422,12 +468,13 @@ class LaunchManagerTab(QWidget):
 
     def _refresh(self) -> None:
         self._node_cache = self._query_nodes()
+        cmdlines = self._running_cmdlines()
         for key, (_start, _stop, status) in self._rows.items():
             preset = self._preset(key)
             if self._procs[key].running:
                 status.setText("● Running (this tab)")
                 status.setStyleSheet("color:#080; font-weight:bold;")
-            elif self._detect_external(preset):
+            elif self._detect_external(preset, cmdlines):
                 status.setText("● Running (external)")
                 status.setStyleSheet("color:#d80;")
             else:

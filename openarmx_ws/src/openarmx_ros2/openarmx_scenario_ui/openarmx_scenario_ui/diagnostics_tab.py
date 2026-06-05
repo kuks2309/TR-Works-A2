@@ -44,8 +44,12 @@ class DiagnosticsTab(QWidget):
         self._build_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
-        self._timer.start(1500)
-        self._refresh()
+        # The refresh timer + (for the rate-showing tab) the bridge's
+        # diagnostics subscriptions only run while this tab is actually visible
+        # — see showEvent/hideEvent. Idle in the background = no periodic
+        # live_node_names()/topic_pub_count() polling and, crucially, no
+        # high-rate topic deserialisation when the user isn't watching.
+        self._refresh()  # one-shot fill so the table isn't blank pre-show
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -170,5 +174,30 @@ class DiagnosticsTab(QWidget):
             fq = sorted(n for n in self._bridge.live_node_names() if n.startswith("/"))
             self._node_view.setPlainText("\n".join(fq) if fq else "(no nodes)")
 
+    # ------------------------------------------------------------------
+    # Visibility-gated polling: only refresh / subscribe while this tab is the
+    # current (visible) page of the QTabWidget. Qt delivers showEvent when the
+    # page is selected and hideEvent when the user switches away.
+    # ------------------------------------------------------------------
+
+    def _consumes_rates(self) -> bool:
+        return self._show in ("both", "topic")
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._consumes_rates():
+            self._bridge.diag_start()
+        if not self._timer.isActive():
+            self._timer.start(1500)
+        self._refresh()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._timer.stop()
+        if self._consumes_rates():
+            self._bridge.diag_stop()
+
     def shutdown(self) -> None:
         self._timer.stop()
+        if self._consumes_rates():
+            self._bridge.diag_stop()

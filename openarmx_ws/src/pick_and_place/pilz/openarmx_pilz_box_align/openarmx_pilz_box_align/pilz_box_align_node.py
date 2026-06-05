@@ -9,7 +9,9 @@ On an ``AlignToBoxes`` goal it:
   1. reading_boxes -- 인지가 발행한 최신 /detected_boxes(base frame)를 읽는다.
   2. assigning     -- +Y 박스는 LEFT, -Y 박스는 RIGHT 팔에 배정(goal.arms 반영).
   3. planning+moving -- 배정된 팔마다 Pilz 모션(link7 -> box.x,box.y,z)을
-     ``/plan_kinematic_path`` 서비스로 계획하고 트래젝토리를 팔 JTC 로 발행.
+     ``/plan_kinematic_path`` 서비스로 계획하고, 트래젝토리를 팔 JTC 의
+     ``follow_joint_trajectory`` 액션으로 보내 실제 완료 result 까지 대기한다
+     (액션 부재 시 joint_trajectory 토픽 폴백). 고정 sleep 없음.
 
 Pilz 가 link7 을 직접 구속하므로 link7->hand_tcp 보정은 불필요.
 
@@ -18,14 +20,16 @@ Pilz 가 link7 을 직접 구속하므로 link7->hand_tcp 보정은 불필요.
 """
 import json
 import math
+import threading
 import time
 
 import rclpy
+from control_msgs.action import FollowJointTrajectory, GripperCommand
 from geometry_msgs.msg import Pose, PoseArray, Quaternion, Vector3
 from moveit_msgs.msg import (BoundingVolume, Constraints, OrientationConstraint,
                              PositionConstraint, RobotState)
 from moveit_msgs.srv import GetMotionPlan
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -58,10 +62,15 @@ class PilzBoxAlignNode(Node):
         self.declare_parameter("plan_time", 5.0)
         self.declare_parameter("detected_boxes_topic", "/detected_boxes")
         self.declare_parameter("max_box_age", 60.0)
+        # 목표 도달 시 gripper open: finger joint 범위 0.0(닫힘)~0.044m(완전 열림).
+        self.declare_parameter("gripper_open_pos", 0.044)
+        self.declare_parameter("gripper_effort", 14.0)
         gp = self.get_parameter
         self.default_vel = float(gp("default_vel_scale").value)
         self.plan_time = float(gp("plan_time").value)
         self.max_age = float(gp("max_box_age").value)
+        self.gripper_open_pos = float(gp("gripper_open_pos").value)
+        self.gripper_effort = float(gp("gripper_effort").value)
 
         cb = ReentrantCallbackGroup()
         self.tf_buffer = Buffer()
@@ -76,11 +85,32 @@ class PilzBoxAlignNode(Node):
                        reliability=ReliabilityPolicy.RELIABLE,
                        durability=DurabilityPolicy.TRANSIENT_LOCAL),
             callback_group=cb)
+        # 완료 신호를 돌려주는 JTC follow_joint_trajectory 액션(주 경로). 액션이
+        # 없을 때만 joint_trajectory 토픽(fire-and-forget)으로 폴백한다.
+        self.jtc_action = {
+            "left": ActionClient(
+                self, FollowJointTrajectory,
+                "/left_joint_trajectory_controller/follow_joint_trajectory",
+                callback_group=cb),
+            "right": ActionClient(
+                self, FollowJointTrajectory,
+                "/right_joint_trajectory_controller/follow_joint_trajectory",
+                callback_group=cb),
+        }
         self.jtc_pub = {
             "left": self.create_publisher(
                 JointTrajectory, "/left_joint_trajectory_controller/joint_trajectory", 10),
             "right": self.create_publisher(
                 JointTrajectory, "/right_joint_trajectory_controller/joint_trajectory", 10),
+        }
+        # 목표 도달 후 여는 GripperActionController (control_msgs/GripperCommand).
+        self.grip_client = {
+            "left": ActionClient(
+                self, GripperCommand, "/left_gripper_controller/gripper_cmd",
+                callback_group=cb),
+            "right": ActionClient(
+                self, GripperCommand, "/right_gripper_controller/gripper_cmd",
+                callback_group=cb),
         }
         self.plan_client = self.create_client(
             GetMotionPlan, "/plan_kinematic_path", callback_group=cb)
@@ -160,8 +190,10 @@ class PilzBoxAlignNode(Node):
         return c
 
     def move_arm(self, side, box_base, z, quat, vel_scale, planner):
-        """Plan a Pilz motion (link7 -> target) via /plan_kinematic_path and publish
-        the trajectory to the arm JTC. Returns (link7_target, duration, error)."""
+        """Plan a Pilz motion (link7 -> target) via /plan_kinematic_path and send the
+        trajectory to the arm JTC. Returns (link7_target, duration, error, waiter)
+        where waiter is a (event, box) completion handle or None on plan failure /
+        topic fallback."""
         target = [box_base[0], box_base[1], z]
         req = GetMotionPlan.Request()
         mpr = req.motion_plan_request
@@ -178,25 +210,108 @@ class PilzBoxAlignNode(Node):
         mpr.goal_constraints = [self._pose_constraints(
             f"openarmx_{side}_link7", BASE, target, quat)]
         if not self.plan_client.wait_for_service(timeout_sec=5.0):
-            return target, 0.0, "plan service unavailable"
+            return target, 0.0, "plan service unavailable", None
         fut = self.plan_client.call_async(req)
         if not self._wait(fut, 20.0):
-            return target, 0.0, "plan timeout"
+            return target, 0.0, "plan timeout", None
         resp = fut.result().motion_plan_response
         if resp.error_code.val != 1:      # MoveItErrorCodes.SUCCESS == 1
-            return target, 0.0, f"plan failed (code {resp.error_code.val})"
+            return target, 0.0, f"plan failed (code {resp.error_code.val})", None
         traj = resp.trajectory.joint_trajectory
         if not traj.points:
-            return target, 0.0, "empty trajectory"
-        self.jtc_pub[side].publish(traj)
+            return target, 0.0, "empty trajectory", None
+        waiter = self._send_traj(side, traj)
         d = traj.points[-1].time_from_start
-        return target, d.sec + d.nanosec * 1e-9, ""
+        return target, d.sec + d.nanosec * 1e-9, "", waiter
+
+    def _send_traj(self, side, traj):
+        """Send the planned trajectory to the <side> JTC via FollowJointTrajectory.
+        Returns a (event, box) completion handle (event set on result), or None if the
+        action is unavailable and we fell back to the fire-and-forget topic."""
+        client = self.jtc_action[side]
+        if not client.wait_for_server(timeout_sec=5.0):
+            self.jtc_pub[side].publish(traj)
+            self.get_logger().warning(
+                f"{side} JTC follow_joint_trajectory unavailable; "
+                "fell back to joint_trajectory topic (no completion signal)")
+            return None
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = traj
+        done = threading.Event()
+        box = {"err": ""}
+
+        def on_result(fut):
+            try:
+                res = fut.result().result
+                if res.error_code != 0:                 # 0 == SUCCESSFUL
+                    box["err"] = f"JTC error_code {res.error_code}: {res.error_string}"
+            except Exception as e:
+                box["err"] = str(e)
+            finally:
+                done.set()
+
+        def on_response(fut):
+            try:
+                gh = fut.result()
+            except Exception as e:
+                box["err"] = str(e)
+                done.set()
+                return
+            if not gh.accepted:
+                box["err"] = "goal rejected"
+                done.set()
+                return
+            gh.get_result_async().add_done_callback(on_result)
+
+        client.send_goal_async(goal).add_done_callback(on_response)
+        return (done, box)
 
     def link7_pos(self, side):
         tf = self._tf(BASE, f"openarmx_{side}_link7", timeout=1.0)
         if tf is None:
             return None
         return [tf.translation.x, tf.translation.y, tf.translation.z]
+
+    # ---------------------------------------------------------------- gripper
+    def open_gripper(self, side):
+        """Open the <side> gripper via GripperActionController; blocks until result.
+        Returns "" on success or an error string (MultiThreadedExecutor-safe)."""
+        client = self.grip_client.get(side)
+        if client is None:
+            return f"unknown gripper side {side!r}"
+        if not client.wait_for_server(timeout_sec=3.0):
+            return f"{side} gripper action unavailable"
+        goal = GripperCommand.Goal()
+        goal.command.position = self.gripper_open_pos
+        goal.command.max_effort = self.gripper_effort
+        done = threading.Event()
+        box = {"err": ""}
+
+        def on_result(fut):
+            try:
+                fut.result()
+            except Exception as e:
+                box["err"] = str(e)
+            finally:
+                done.set()
+
+        def on_response(fut):
+            try:
+                gh = fut.result()
+            except Exception as e:
+                box["err"] = str(e)
+                done.set()
+                return
+            if not gh.accepted:
+                box["err"] = "goal rejected"
+                done.set()
+                return
+            gh.get_result_async().add_done_callback(on_result)
+
+        client.send_goal_async(goal).add_done_callback(on_response)
+        if not done.wait(timeout=10.0):
+            return f"{side} gripper open timeout"
+        return box["err"]
 
     # -------------------------------------------------------------- execute
     def _fb(self, gh, phase, prog):
@@ -239,16 +354,33 @@ class PilzBoxAlignNode(Node):
         self._fb(gh, "planning", 0.6)
         report = {}
         durations = []
+        waiters = {}
         for side, b in assigned.items():
-            tgt, dur, err = self.move_arm(side, b["base"], goal.z, quat, vel, planner)
+            tgt, dur, err, waiter = self.move_arm(side, b["base"], goal.z, quat, vel, planner)
             report[side] = {"box_base": b["base"], "link7_target": tgt, "plan_error": err}
             if err:
                 self.get_logger().warning(f"{side}: {err}")
             else:
                 durations.append(dur)
+                if waiter is not None:
+                    waiters[side] = waiter
 
+        # 완료 신호(JTC follow_joint_trajectory result) 기반 대기 — 고정 sleep 대체.
+        # 두 팔은 이미 동시에 출발했으므로 결과를 순차로 기다려도 총 대기 = 더 느린 쪽.
         self._fb(gh, "moving", 0.8)
-        time.sleep((max(durations) if durations else 3.0) + 1.5)
+        deadline = (max(durations) if durations else 3.0) + 5.0
+        for side, (ev, box) in waiters.items():
+            if not ev.wait(timeout=deadline):
+                report[side]["move_error"] = "trajectory result timeout"
+                self.get_logger().warning(f"{side}: trajectory result timeout")
+            elif box["err"]:
+                report[side]["move_error"] = box["err"]
+                self.get_logger().warning(f"{side} move: {box['err']}")
+        # 액션 미지원으로 토픽 폴백한 팔은 완료 신호가 없으니 시간으로 보정 대기.
+        planned = [s for s in assigned if not report[s].get("plan_error")]
+        if any(s not in waiters for s in planned):
+            time.sleep((max(durations) if durations else 3.0) + 1.5)
+
         for side in assigned:
             cur = self.link7_pos(side)
             if cur is not None:
@@ -256,6 +388,14 @@ class PilzBoxAlignNode(Node):
                 err = math.sqrt(sum((cur[i] - tgt[i]) ** 2 for i in range(3)))
                 report[side]["link7_final"] = cur
                 report[side]["err_mm"] = round(err * 1000, 1)
+
+        # 목표 지점 도달 -> 배정된 팔의 gripper open.
+        self._fb(gh, "opening_gripper", 0.9)
+        for side in assigned:
+            gerr = self.open_gripper(side)
+            report[side]["gripper"] = "open" if not gerr else f"open_failed: {gerr}"
+            if gerr:
+                self.get_logger().warning(f"{side} gripper open: {gerr}")
 
         self._fb(gh, "done", 1.0)
         gh.succeed()

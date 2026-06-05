@@ -47,10 +47,10 @@
   <xacro:arg name="left_arm_base_xyz" default="0.0 0.031 0.698" />
   <xacro:arg name="left_arm_base_rpy" default="-1.5708 0 0" /> -->
  
-  <xacro:arg name="right_arm_base_xyz" default="0.0 -0.031 0.735" />
+  <xacro:arg name="right_arm_base_xyz" default="0.0 -0.031 1.275" />
   <xacro:arg name="right_arm_base_rpy" default="1.5708 0 0" />
 
-  <xacro:arg name="left_arm_base_xyz" default="0.0 0.031 0.735" />
+  <xacro:arg name="left_arm_base_xyz" default="0.0 0.031 1.275" />
   <xacro:arg name="left_arm_base_rpy" default="-1.5708 0 0" />
 
 
@@ -97,11 +97,13 @@
   <!-- Calibrated D435 center camera (visual-only).                  -->
   <!-- Parent frame openarmx_body_link0 only exists in bimanual, so  -->
   <!-- this block is guarded; single-arm v10 stays unchanged.        -->
-  <!-- Extrinsic (2026-06-01 ChArUco recalib, 60deg mount,           -->
-  <!-- board @ base_link (0.35, 0, 0.12) m, roll 180):               -->
+  <!-- Extrinsic (2026-06-05 ChArUco recalib, raised-arm config:     -->
+  <!--   arm_base z=1.275 (+0.54 m vs old), 60deg mount,             -->
+  <!--   board @ openarmx_body_link0 (0.19, 0.175, 0.72) m, roll 180; -->
+  <!--   fresh ChArUco 30-frame PnP solve on kkw cam)               -->
   <!--   body_link0 -> d435_center_link                              -->
-  <!--   t=(0.065430, 0.000987, 0.641921) m                          -->
-  <!--   rpy=(0.6846, 59.7350, 0.4038) deg                           -->
+  <!--   t=(0.062816, 0.020383, 1.183573) m                         -->
+  <!--   rpy=(-0.4588, 59.7955, -0.6353) deg                         -->
   <!-- Mesh visual origin copied from realsense2_description.        -->
   <!-- No collision geometry: planning/control unaffected.           -->
   <!-- ============================================================= -->
@@ -109,8 +111,8 @@
     <joint name="d435_center_calib_joint" type="fixed">
       <parent link="openarmx_body_link0"/>
       <child link="d435_center_link"/>
-      <origin xyz="0.065430 0.000987 0.641921"
-              rpy="${radians(0.6846)} ${radians(59.7350)} ${radians(0.4038)}"/>
+      <origin xyz="0.062816 0.020383 1.183573"
+              rpy="${radians(-0.4588)} ${radians(59.7955)} ${radians(-0.6353)}"/>
     </joint>
     <link name="d435_center_link">
       <visual>
