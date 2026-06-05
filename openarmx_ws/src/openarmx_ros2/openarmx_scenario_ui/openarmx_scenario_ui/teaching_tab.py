@@ -53,12 +53,12 @@ _CART_HEADERS = (
 )
 CART_COL_COUNT = len(_CART_HEADERS)  # 13
 
-# Uniform width (px) for every value column in BOTH tables. The name column (0)
-# stretches to absorb the remaining width; all numeric columns share this exact
-# width so the joint/gripper and Cartesian grids line up instead of being sized
-# per-content (which made the grid jagged).
-_VALUE_COL_W = 72
-# Same fixed width for the "Pose명" (name) column in BOTH tables so they align.
+# Both tables fill the SAME horizontal extent so the top (17-col) and bottom
+# (13-col) grids look like one uniform block. The name column (0) is a shared
+# fixed width in BOTH tables (so the name columns line up); every value column
+# stretches to share the remaining panel width. A previous attempt used a fixed
+# value width + trailing spacer, which made the shorter table end early with a
+# big empty area — the two tables then looked like different lengths.
 _NAME_COL_W = 120
 
 # Capture-frame choices. "" sentinel = resolve per-arm to openarmx_<arm>_link0.
@@ -155,14 +155,14 @@ class TeachingTab(QWidget):
         return h
 
     def _make_table(self, headers: list) -> QTableWidget:
-        # IDENTICAL column sizing in BOTH tables: the name column and every value
-        # column are the SAME fixed width regardless of how many columns a table
-        # has (17 vs 13). A trailing Stretch "spacer" column absorbs the leftover
-        # width so the table still fills the panel. Previously col-0 was Stretch,
-        # which made the 17-col and 13-col tables size their columns completely
-        # differently (the user's complaint).
+        # Both tables fill the panel to the SAME width so the 17-col and 13-col
+        # grids look like one uniform block. The name column (0) is a shared
+        # fixed width in BOTH tables so the name columns align; every value
+        # column Stretches to share the remaining width. A retired column-0
+        # spacer is kept (collapsed to 0 width) only so existing column-index
+        # logic stays valid.
         ncols = len(headers)
-        t = QTableWidget(0, ncols + 1)                          # +1 spacer
+        t = QTableWidget(0, ncols + 1)                          # +1 spacer (0-w)
         t.setHorizontalHeaderLabels(list(headers) + [""])
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -171,10 +171,10 @@ class TeachingTab(QWidget):
         hh.setMinimumSectionSize(0)
         hh.setSectionResizeMode(0, QHeaderView.Fixed)           # name col
         t.setColumnWidth(0, _NAME_COL_W)
-        for c in range(1, ncols):                               # value cols
-            hh.setSectionResizeMode(c, QHeaderView.Fixed)
-            t.setColumnWidth(c, _VALUE_COL_W)
-        hh.setSectionResizeMode(ncols, QHeaderView.Stretch)     # spacer
+        for c in range(1, ncols):                               # value cols fill
+            hh.setSectionResizeMode(c, QHeaderView.Stretch)
+        hh.setSectionResizeMode(ncols, QHeaderView.Fixed)       # collapsed spacer
+        t.setColumnWidth(ncols, 0)
         # Value cells use the shared gray look; headers use the shared bold axis
         # style. Table-level selection color so the whole selected row (incl. the
         # empty spacer cell) is light-blue with dark text — without it the default

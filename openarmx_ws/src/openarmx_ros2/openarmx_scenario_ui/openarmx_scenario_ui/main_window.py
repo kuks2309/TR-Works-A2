@@ -144,11 +144,11 @@ class ScenarioMainWindow(QMainWindow):
         self._pipe_health_tab = DiagnosticsTab(self._bridge, parent=self, show="topic")
         self._tabs.addTab(self._pipe_health_tab, "Pipe Health")
         self.setCentralWidget(self._tabs)
-        # Minimum size pinned to the user's current working window size so the
-        # UI cannot be shrunk below the point where tab headers / combos start
-        # truncating. Cartesian Jog has step + velocity rows per arm group.
-        self.setMinimumSize(1962, 1365)
-        self.resize(1962, 1365)
+        # Keep the default window width under 1920 (it was over-pinned at 1962).
+        # Tables now stretch their columns to fill, so the wide minimum is no
+        # longer needed; minimum is relaxed so the window can be sized down.
+        self.setMinimumSize(1280, 900)
+        self.resize(1600, 1320)
 
         # ---- bridge signals ----
         self._bridge.sig_status_event.connect(self._on_status_event)

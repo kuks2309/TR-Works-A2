@@ -9,18 +9,26 @@ Manager. It drives the shared ScenarioRosBridge (no second rclpy context).
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from datetime import datetime
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
+    QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QMessageBox, QPushButton, QSlider, QVBoxLayout,
     QWidget,
 )
 
 from openarmx_scenario_ui import joint_data as jd
+from openarmx_scenario_ui.cartesian_control_tab import (
+    AXIS_LABEL_QSS, VALUE_CELL_QSS,
+)
+
+# Reference frame for the bimanual Cartesian readout: the shared bimanual base,
+# so both arms' poses are expressed in one comparable frame.
+_CART_REF_FRAME = "openarmx_body_link0"
 
 # Bringup/launch is handled by the dedicated "Launch Manager" tab — this tab
 # no longer owns its own bringup processes (avoids duplicate /controller_manager).
@@ -41,6 +49,9 @@ class JointControlTab(QWidget):
         self._grip_spins = {}     # {joint: QDoubleSpinBox}  (meters)
         self._grip_sliders = {}
         self._grip_actual = {}
+
+        # Live bimanual Cartesian readout cells: {arm: {x/y/z/R/P/Y: QLabel}}.
+        self._cart_labels = {"left": {}, "right": {}}
 
         self._current = {}        # {joint: value} latest received (deg / m)
         self._last_recv_time = 0.0
@@ -73,6 +84,12 @@ class JointControlTab(QWidget):
         self._cmd_debounce.setSingleShot(True)
         self._cmd_debounce.timeout.connect(self._send_to_controllers)
 
+        # Live Cartesian readout refresh (2 Hz) — cheap TF lookups per arm.
+        self._cart_timer = QTimer(self)
+        self._cart_timer.timeout.connect(self._refresh_cart)
+        self._cart_timer.start(500)
+        self._refresh_cart()
+
         self._set_status("SIL Mode — Ready")
 
     # ------------------------------------------------------------------
@@ -88,6 +105,7 @@ class JointControlTab(QWidget):
         root.addLayout(arms_row)
 
         root.addWidget(self._build_gripper_group())
+        root.addWidget(self._build_cartesian_group())
         root.addLayout(self._build_controls())
 
         hint = QLabel("ℹ Bringup/launch 실행은 'Launch Manager' 탭에서 합니다.")
@@ -183,6 +201,80 @@ class JointControlTab(QWidget):
                 lambda val, sl=slider: self._spin_to_slider(val, sl, GRIP_SCALE))
             spin.valueChanged.connect(lambda _val: self._maybe_publish())
         return grp
+
+    def _build_cartesian_group(self) -> QGroupBox:
+        """Bimanual live Cartesian readout for both arms, with a shared link7/TCP
+        EE-point selector. Poses are expressed in the bimanual base frame."""
+        grp = QGroupBox(f"Cartesian pose (in {_CART_REF_FRAME})")
+        v = QVBoxLayout(grp)
+
+        hdr = QHBoxLayout()
+        hdr.addWidget(QLabel("EE point:"))
+        self.cmb_cart_point = QComboBox()
+        self.cmb_cart_point.addItem("link7", userData="link7")
+        self.cmb_cart_point.addItem("TCP", userData="hand_tcp")
+        self.cmb_cart_point.currentIndexChanged.connect(self._refresh_cart)
+        hdr.addWidget(self.cmb_cart_point)
+        hdr.addStretch()
+        v.addLayout(hdr)
+
+        arms = QHBoxLayout()
+        arms.addLayout(self._build_arm_cart_block("Left", "left"))
+        arms.addLayout(self._build_arm_cart_block("Right", "right"))
+        v.addLayout(arms)
+        return grp
+
+    def _build_arm_cart_block(self, title: str, arm: str) -> QVBoxLayout:
+        box = QVBoxLayout()
+        box.addWidget(QLabel(f"<b>{title}</b>"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        grid.addWidget(QLabel("<b>Position (m)</b>"), 0, 0, 1, 3)
+        for c, ax in enumerate(("x", "y", "z")):
+            self._cart_labels[arm][ax] = self._cart_cell(grid, ax, 1, c)
+        grid.addWidget(QLabel("<b>Orientation (deg)</b>"), 2, 0, 1, 3)
+        for c, ax in enumerate(("R", "P", "Y")):
+            self._cart_labels[arm][ax] = self._cart_cell(grid, ax, 3, c)
+        box.addLayout(grid)
+        return box
+
+    def _cart_cell(self, grid: QGridLayout, name: str, row: int, col: int):
+        """One '<name> <value>' readout cell, styled like the Cartesian tab."""
+        lbl_name = QLabel(name)
+        lbl_name.setStyleSheet(AXIS_LABEL_QSS)
+        lbl_val = QLabel("---")
+        lbl_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lbl_val.setStyleSheet(VALUE_CELL_QSS)
+        cell = QHBoxLayout()
+        cell.setContentsMargins(0, 0, 0, 0)
+        cell.setSpacing(6)
+        cell.addWidget(lbl_name)
+        cell.addWidget(lbl_val, 1)
+        wrap = QWidget()
+        wrap.setLayout(cell)
+        grid.addWidget(wrap, row, col)
+        return lbl_val
+
+    def _refresh_cart(self) -> None:
+        """Update both arms' Cartesian readouts via TF (link7 or hand TCP)."""
+        if not hasattr(self, "cmb_cart_point"):
+            return
+        point = self.cmb_cart_point.currentData() or "link7"
+        for arm in ("left", "right"):
+            labels = self._cart_labels[arm]
+            controlled = f"openarmx_{arm}_{point}"
+            pose = self._bridge.get_ee_pose(arm, _CART_REF_FRAME, controlled)
+            if not pose:
+                for lbl in labels.values():
+                    lbl.setText("---")
+                continue
+            labels["x"].setText(f"{pose['x']:+.4f}")
+            labels["y"].setText(f"{pose['y']:+.4f}")
+            labels["z"].setText(f"{pose['z']:+.4f}")
+            labels["R"].setText(f"{math.degrees(pose['roll']):+.2f}")
+            labels["P"].setText(f"{math.degrees(pose['pitch']):+.2f}")
+            labels["Y"].setText(f"{math.degrees(pose['yaw']):+.2f}")
 
     def _build_controls(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -486,3 +578,4 @@ class JointControlTab(QWidget):
         self._sil_timer.stop()
         self._display_timer.stop()
         self._cmd_debounce.stop()
+        self._cart_timer.stop()
