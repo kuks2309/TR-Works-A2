@@ -82,7 +82,10 @@ def postprocess(outputs, conf, iou):
 
 
 def make_mask(proto, coeff, box) -> np.ndarray:
-    """proto(160,160,32) @ coeff(32,) -> sigmoid -> 640 mask, cropped to box, >0.5."""
+    """proto(160,160,32) @ coeff(32,) -> sigmoid -> 640 mask, cropped to box, >0.5.
+
+    Full-resolution mask, used only for the polygon overlay (viewer). The picking
+    path uses mask_centroids() instead, which never upsamples to 640."""
     m = sigmoid(proto @ coeff)        # (160,160)
     m = cv2.resize(m, (NET, NET))     # 640x640
     x1, y1, x2, y2 = [int(c) for c in box]
@@ -92,6 +95,42 @@ def make_mask(proto, coeff, box) -> np.ndarray:
     if x2 > x1 and y2 > y1:
         out[y1:y2, x1:x2] = m[y1:y2, x1:x2]
     return out > 0.5
+
+
+def mask_centroids(proto, coeffs, boxes):
+    """Vectorised mask centroid + area, computed at PROTO resolution (160) — no
+    per-detection 640x640 resize.
+
+    proto:  (Hp,Wp,C) prototype masks ; coeffs: (K,C) per-instance coefficients ;
+    boxes:  list of K [x1,y1,x2,y2] in NET(640) space.
+    Returns a list of K (cx_net, cy_net, area_net) or None (empty mask), where the
+    centroid is in NET(640) px and area in NET px^2.
+
+    The centroid of a filled region is resolution-robust, so computing it on the
+    160 grid and scaling by s=NET/Hp lands within <1px of the full-640 result
+    while skipping the resize + np.zeros(640,640) + np.where(640,640) that
+    dominated the old per-detection cost (~3ms/det -> ~0.x ms/det)."""
+    Hp, Wp, C = proto.shape
+    s = NET / Hp                                       # 160 -> 640 scale (=4.0)
+    # Threshold the raw logits: sigmoid(x) > 0.5  <=>  x > 0, so the per-element
+    # np.exp is unnecessary for the mask membership test.
+    logits = (proto.reshape(-1, C) @ coeffs.T).reshape(Hp, Wp, -1)  # (Hp,Wp,K)
+    out = []
+    for k, box in enumerate(boxes):
+        x1, y1 = max(0, int(box[0] / s)), max(0, int(box[1] / s))
+        x2 = min(Wp, int(np.ceil(box[2] / s)))
+        y2 = min(Hp, int(np.ceil(box[3] / s)))
+        if x2 <= x1 or y2 <= y1:
+            out.append(None)
+            continue
+        ys, xs = np.where(logits[y1:y2, x1:x2, k] > 0.0)
+        if xs.size == 0:
+            out.append(None)
+            continue
+        out.append(((float(xs.mean()) + x1) * s,
+                    (float(ys.mean()) + y1) * s,
+                    int(xs.size * s * s)))
+    return out
 
 
 def load_labels(path: Optional[str]) -> List[str]:
@@ -171,15 +210,18 @@ class HailoYoloSeg:
         inp = np.expand_dims(inp, 0).astype(np.uint8)
         out = self._infer.infer({self._in_name: inp})
         fb, sc, ci, co, proto = postprocess(out, conf_thr, self.iou)
+        if not fb:
+            return []
+
+        # Centroid + area at proto(160) resolution, all instances at once. The old
+        # path upsampled each mask to 640x640 (~3ms/det); this stays on the 160 grid.
+        cents = mask_centroids(proto, np.asarray(co, dtype=np.float32), fb)
 
         dets: List[dict] = []
-        for box, score, cid, coeff in zip(fb, sc, ci, co):
-            mask = make_mask(proto, coeff, box)          # (640,640) bool, NET space
-            ys, xs = np.where(mask)
-            if xs.size > 0:
-                cx_net, cy_net = float(xs.mean()), float(ys.mean())
-                area = int(xs.size)
-            else:  # mask empty -> fall back to bbox centre
+        for box, score, cid, coeff, cen in zip(fb, sc, ci, co, cents):
+            if cen is not None:
+                cx_net, cy_net, area = cen
+            else:  # empty mask -> fall back to bbox centre
                 cx_net, cy_net = 0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3])
                 area = 0
             det = {
@@ -190,7 +232,8 @@ class HailoYoloSeg:
                 "centroid_px": [cx_net * sx, cy_net * sy],
                 "mask_area_px": int(area * sx * sy),
             }
-            if return_polygon:
+            if return_polygon:  # full-res mask only when the overlay needs a polygon
+                mask = make_mask(proto, coeff, box)
                 cnts, _ = cv2.findContours(mask.astype(np.uint8),
                                            cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if cnts:

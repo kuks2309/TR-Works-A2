@@ -42,3 +42,4 @@ China 모노레포 (openarmx_ws / cyclo_control / calibration / 3d_detect_ws 등
 ## 별도 기록 파일
 
 - [2026-06-01 YOLOv8 연속 추론 → on-demand DetectBox action server 전환](2026-06-01_yolov8_on_demand_action_server.md)
+- [2026-06-05 원격 Hailo seg 추론 지연: 마스크 후처리 병목 제거 (infer 77→31ms)](2026-06-05_remote_hailo_seg_postprocess_optimization.md)
