@@ -7,6 +7,56 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-06 20:05 (KST) — HIL(Hardware In the Loop) RViz 로봇 망가짐: CAN(Controller Area Network) 미기동 → ros2_control_node SIGABRT → /joint_states 미발행 → TF(Transform) 깨짐
+
+### 증상
+HIL(Hardware In the Loop) 구동 시 RViz(ROS Visualization)에서 로봇이 망가져 보임(링크가 길게 늘어지고 카메라/포인트클라우드가 엉뚱한 위치). SIL(Software In the Loop, `use_fake_hardware:=true`)에서는 동일 URDF(Unified Robot Description Format)로 정상 렌더됨. 즉 SIL 정상 / HIL 만 깨짐.
+
+### 원인
+TF(Transform)/URDF(Unified Robot Description Format) 버그가 아니라 **CAN(Controller Area Network) 미기동의 연쇄**. 객관 증거:
+1. `can2`(right)/`can3`(left) 인터페이스가 DOWN(`ip -details link show`: `state STOPPED`, bitrate 미설정).
+2. [openarmx_hardware.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/openarmx_hardware.launch.py)는 CAN(Controller Area Network)을 올리지 않고 인터페이스 이름만 파라미터로 전달 → 다운된 소켓을 그대로 사용.
+3. `v10_simple_hardware` on_init 의 소켓 생성([v10_simple_hardware.cpp:227](../../openarmx_ws/src/openarmx_ros2/openarmx_hardware/src/v10_simple_hardware.cpp#L227) `OpenArmX(can_interface_, can_fd_)`)에서 `std::runtime_error` throw → 미포착 → `std::terminate` → SIGABRT(Signal Abort). `~/.ros/log/.../launch.log` 에 `terminate called after throwing an instance of 'std::runtime_error' ... Aborted` 확인, `/var/crash` 에 apport 크래시 덤프 존재.
+4. `ros2_control_node` 가 크래시·respawn 루프(생존 ~3초) → `controller_manager` 서비스 불안정 → `joint_state_broadcaster` spawner 가 무한 대기(600초+).
+5. → `/joint_states` 퍼블리셔 0개 → `robot_state_publisher` 가 관절각 미수신 → 동적 TF(Transform) 미발행 → RViz(ROS Visualization) 로봇 망가짐.
+
+SIL(Software In the Loop)은 mock 하드웨어가 CAN(Controller Area Network) 없이 초기화되므로 항상 정상. → SIL 만 멀쩡했던 이유.
+
+### 수정
+HW(Hardware) launch 가 HIL(Hardware In the Loop) 시 CAN(Controller Area Network)을 **자동 기동**하도록 통합(단일 근원: 스크립트 1개).
+- 신규 [up_follower_can.sh](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/scripts/up_follower_can.sh): `can2`/`can3` 만(leader can0/can1 불간섭) bitrate 1000000(1 Mbps, classic CAN 2.0)로 멱등 기동. 비대화형 sudo(`SUDO_PASSWORD` 기본 `"ff"`, 기존 [run_bimanual_moveit_with_can2.0.sh](../../openarmx_ws/src/openarmx_ros2/openarmx_bimanual_moveit_config/run_bimanual_moveit_with_can2.0.sh) 관행 동일). 이미 UP 이면 skip.
+- [openarmx_hardware.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/openarmx_hardware.launch.py): `use_fake_hardware=="false"` 일 때 `ros2_control_node` 생성 **전에** `_ensure_can_up([right_can, left_can])` 호출(위 스크립트를 멱등 실행). SIL 은 호출 안 함.
+- [CMakeLists.txt](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/CMakeLists.txt): 스크립트를 `install(PROGRAMS ...)` 에 추가.
+
+검증(E2E): `can2`/`can3` 강제 down → HIL launch → 로그에 `[up_follower_can] canX: UP ✓`, `ros2_control_node` 크래시 없이 생존(이전 `terminate/Aborted` 소멸), 하드웨어 컴포넌트 양팔 `active`, `joint_state_broadcaster`+JTC(Joint Trajectory Controller)+gripper 5종 활성화, `/joint_states` 퍼블리셔 1개+실제 관절각(예: -0.0926 rad, 모터 통신 정상), `/tf` ~18Hz 발행, 전 로봇 프레임 존재. 캡처: `experiments/capture/200240_rviz_TF_recovered.png`.
+
+### 재발 방지
+- HIL(Hardware In the Loop) 진입점([openarmx_hardware.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/openarmx_hardware.launch.py))이 CAN(Controller Area Network)을 보장하므로 "launch 전에 수동 `ip link`" 누락으로 인한 재발 차단.
+- 단, `can_fd:=false` 전제(classic CAN 2.0, bitrate 1000000). CAN-FD 사용 시 스크립트/비트레이트 조정 필요.
+- `up_follower_can.sh` 가 모든 대상 UP 시 0, 부재/실패 시 1 반환 → launch 는 실패해도 계속 진행(로그 경고)하므로, 그래도 안 뜨면 모터 전원/배선/CAN 어댑터 점검(패시브 candump 무트래픽은 MIT 모드 특성상 단정 불가).
+- 참고: 정본 `en_all_can.py`(모든 CAN UP)는 현재 `openarmx_arm_driver` import 시 `placo.so` 심볼 오류(numpy/pinocchio ABI(Application Binary Interface) 충돌 계열)로 실패 가능 → 의존성 없는 `ip link` 경로 채택.
+
+---
+
+## 2026-06-06 19:06 (KST) — ptp box_align: IK 가 관절한계 무시 후 끝에서 1회 clamp → TCP(Tool Center Point) 65mm 오차
+
+### 증상
+신규 `openarmx_ptp_box_align`(Pinocchio DLS(Damped Least Squares) IK(Inverse Kinematics) → 단일 JTC(Joint Trajectory Controller) 끝점) 실로봇 첫 모션에서, 오른팔이 검출 박스 `(0.346, -0.116, 0.782)` 위로 갈 때 `ik_converged: true`(residual 9e-5)인데도 `err_mm: 65.0` 로 TCP(Tool Center Point)가 6.5cm 빗나감.
+
+### 원인
+`solveIK()` 의 DLS(Damped Least Squares) 루프가 매 스텝 관절한계를 강제하지 않고 수렴까지 자유 적분 → joint2 가 한계를 0.112 rad 초과한 해에 수렴(무클램프 FK(Forward Kinematics) 오차 0.1mm). 그 뒤 **루프 종료 후 1회만 clamp** 하니, 실제 명령되는 clamp 된 q 의 FK(Forward Kinematics) 가 타깃에서 65mm 벗어남. residual 은 clamp 이전 q 기준이라 false-positive 로 converged 보고.
+
+### 수정
+[ptp_box_align_node.cpp](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_box_align/src/ptp_box_align_node.cpp) `solveIK()` — `integrate` 직후 **매 스텝 `clampToLimits`** 추가(한계-인식 DLS(Damped Least Squares)). 한계 내에서 정확해로 수렴하고, 수렴 판정도 clamp 된 q 기준이라 도달불가 타깃은 `ik_converged=false` 로 정직하게 표시.
+- 검증(오프라인): 동일 타깃에서 매스텝 clamp err 0.1mm / 끝1회 clamp 65mm. 랜덤재시작 30 best 0.0mm(한계 내 정확해 존재).
+- 검증(실로봇): 재빌드 후 동일 모션 → `err_mm 0.05`, residual 1e-4. 전 파이프라인(검출→/detected_boxes→ptp IK(Inverse Kinematics)→JTC(Joint Trajectory Controller)→이동→그리퍼) 서브밀리미터 동작.
+
+### 재발 방지
+- 한계-제약 없는 미분 IK(Inverse Kinematics)(DLS(Damped Least Squares)/CLIK)는 **매 반복 한계 clamp** 필수(끝에서만 clamp 금지). 수렴 판정은 clamp 된 q 기준으로 해 false-positive 방지.
+- ptp 는 의도적으로 CBF(Control Barrier Function)/충돌제약이 없는 경량 백엔드라 한계 처리는 clamp 가 유일 안전장치다.
+
+---
+
 ## 2026-06-06 09:34 (KST) — Diagnostics(Pipe/Node Health) 표 컬럼 폭이 매 갱신마다 흔들림
 
 ### 증상

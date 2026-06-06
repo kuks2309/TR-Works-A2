@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 
 install(PROGRAMS
   scripts/scenario_player_node.py
+  scripts/up_follower_can.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 
