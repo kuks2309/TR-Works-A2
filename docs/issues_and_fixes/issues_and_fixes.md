@@ -7,6 +7,25 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-06 09:34 (KST) — Diagnostics(Pipe/Node Health) 표 컬럼 폭이 매 갱신마다 흔들림
+
+### 증상
+Scenario UI(User Interface) 의 Pipe Health / Node Health 탭 표가 1.5 초 주기 갱신마다 컬럼 폭이 미세하게 바뀌며 레이아웃이 흔들렸다. Value 칸이 살아있는 값(`68.0 Hz`)·`no pub`·`latched`·`idle`·`no data` 등으로 바뀔 때마다 폭이 달라져 그 오른쪽 Detail 경계까지 움직였다.
+
+### 원인
+[diagnostics_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/diagnostics_tab.py) 의 표 헤더에서 Category·Link·Value 3개 컬럼이 `QHeaderView.ResizeToContents` 였다. `_refresh()` 가 매 틱마다 Value 칸 텍스트를 갱신하는데, 그 픽셀 폭이 상태별로 제각각이라 ResizeToContents 가 매번 컬럼을 재계산 → 표 전체 레이아웃이 일정하지 않았다.
+
+### 수정
+컬럼 0~3 을 `QHeaderView.Fixed` 로 변경(Detail 컬럼 4만 `Stretch` 유지로 패널 채움). Category·Link 폭은 `QFontMetrics` 로 정적 spec 텍스트에서 빌드 시 1회 산출(탭별 최장 텍스트에 맞춤), Value 폭은 최장 표시값(`100.6 Hz`, `no data` 등)에 맞춘 고정값. 라이브 값과 무관하게 폭이 고정된다.
+
+- 변경 파일: `diagnostics_tab.py` (import 1줄 + `_build_ui` 컬럼 사이징 블록). 코드 외 동작 변화 없음.
+- 검증: 오프스크린 렌더로 동일 표를 라이브 상태(`68.0 Hz` 등) vs 전부 `no pub` 상태로 갱신 후 컬럼 폭 비교 → `[36, 118, 451, 100]` 으로 **양쪽 동일**(assert 통과). 스크린샷 `experiments/capture/20260606_091403_pipe_health_fixed.png` 에서 최장 Link(`/openarmx_left_movel_controller/controller_error`) 전체 표시·Value 고정 확인.
+
+### 재발 방지
+- 주기 갱신되는 셀이 든 표에서 그 컬럼에 `ResizeToContents` 를 쓰면 폭이 흔들린다 — 갱신 셀이 있는 컬럼은 `Fixed`(+필요 시 `QFontMetrics` 로 정적 폭 산출), 한 컬럼만 `Stretch` 로 채우는 패턴을 기본으로 한다.
+
+---
+
 ## 2026-06-05 17:15 (KST) — a2-scenario(scenario_ui) pinocchio import segfault: numpy 1.x/2.x ABI 충돌
 
 ### 증상

@@ -8,7 +8,7 @@ shared ScenarioRosBridge (no second rclpy context).
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtGui import QBrush, QColor, QFontMetrics
 from PyQt5.QtWidgets import (
     QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
@@ -66,13 +66,33 @@ class DiagnosticsTab(QWidget):
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setSelectionMode(QAbstractItemView.NoSelection)
         self._table.verticalHeader().setDefaultSectionSize(26)
+        # Fixed column widths so the table layout never shifts as the live
+        # Value cell content changes each refresh ("68.0 Hz" -> "no pub" ->
+        # "latched" -> "idle" all differ in width). Category/Link are sized once
+        # from the static spec text via font metrics (tailored per tab); Value
+        # gets a width that fits its widest reading. Only Detail (col 4) flexes.
+        fm = QFontMetrics(self._table.font())
+        pad = 24  # cell margins + a little slack
+
+        def _fit(texts, minimum):
+            return max([minimum] + [fm.horizontalAdvance(t) + pad for t in texts])
+
+        cat_w = _fit(["Category"] + [s[1] for s in self._spec], 70)
+        link_w = _fit(["Link"] + [s[2] for s in self._spec], 120)
+        # Widest Value cell across all states (e.g. "100.6 Hz", "no data").
+        val_w = _fit(["Value", "100.6 Hz", "latched", "no data", "no pub",
+                      "alive", "idle", "down", "off"], 70)
+
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Fixed)
-        self._table.setColumnWidth(0, 28)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.Fixed)
+        hh.setSectionResizeMode(2, QHeaderView.Fixed)
+        hh.setSectionResizeMode(3, QHeaderView.Fixed)
         hh.setSectionResizeMode(4, QHeaderView.Stretch)
+        self._table.setColumnWidth(0, 28)
+        self._table.setColumnWidth(1, cat_w)
+        self._table.setColumnWidth(2, link_w)
+        self._table.setColumnWidth(3, val_w)
 
         for row, (_kind, cat, link, detail, _extra) in enumerate(self._spec):
             dot = QTableWidgetItem("●")
