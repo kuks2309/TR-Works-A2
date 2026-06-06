@@ -7,6 +7,22 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-07 (KST) — pick_and_place UI 검출/pick 지연: ros2 action send_goal CLI subprocess 콜드스타트 (진단만, 수정 보류)
+
+### 증상
+scenario_ui pick_and_place 탭에서 검출요청/pick 누르면 ~0.8~0.9초 소요. 사용자 의문 "UI 타이머 때문인가?". 반면 액션 서버 자체(이미지→Pi YOLO 분류 E2E)는 ~46ms.
+
+### 원인
+**UI 타이머 아님**(QTimer 는 상태표시 2s·자세 readout 0.5s 용, 검출/pick 경로와 분리). 근본 원인은 UI 가 검출요청·pick 을 매번 `ros2 action send_goal` **CLI 를 QProcess 로 새로 spawn** → 매회 콜드스타트(bash + 워크스페이스 source 0.2s + ros2 CLI 로드 + 새 rclpy 노드 + DDS discovery). 라이브 실측: CLI 방식 **~850ms** vs in-process 액션 클라이언트 **43.8ms** (약 19배). 근거 [pick_and_place_tab.py:561-584](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/pick_and_place_tab.py#L561-L584)(검출요청), [:484-495](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/pick_and_place_tab.py#L484-L495)(메인 pick).
+
+### 수정
+미적용. 진단·측정만 수행(코드 변경 없음). **전용 pick and place UI 생성 시 in-process 액션 클라이언트로 적용 예정**(사용자 결정). 상세·측정표 → [2026-06-07_ui_detect_send_goal_cli_latency.md](2026-06-07_ui_detect_send_goal_cli_latency.md).
+
+### 재발 방지
+반복 호출 액션/서비스는 UI 에서 `ros2 … send_goal` CLI spawn 금지(매회 ~0.8s). in-process 액션 클라이언트 사용. CLI spawn 은 일회성 launch 전용.
+
+---
+
 ## 2026-06-07 05:02 (KST) — ptp 백엔드 모델 이중화 제거 리팩터 + 31mm xacro SSOT 수정 (라이브 검증완료)
 
 ### 증상 / 동기

@@ -206,3 +206,19 @@ cyclo 재빌드(core+ros) 완료. 오프라인 OSQP repro로 contort 제거 확�
 - **B**: bringup yaml `{left,right}_arm_position_controller`(7관절 forward passthrough) + cyclo `output_mode`/`forward_command_topic` + `openarmx_movel_bimanual.launch.py` 인자 — HIL 검증(cyclo→JTC 0건, 직접제어).
 - **solver**: qp_base.hpp OSQP eps+polish — 오프라인 검증(contort 제거), HIL 보류.
 - JTC `open_loop_control: true`(both yaml, jog 풀림) + 모터게인 팩토리 복원.
+
+---
+
+## 2026-06-07 — 시작 시 cyclo control 자동기동 제거 (사용자 요청 없었음)
+
+### 증상
+scenario_ui/시작 시 cyclo MoveL 컨트롤러(omx_movel_controller)가 자동 기동됨. 사용자가 요청한 적 없음.
+
+### 원인
+`~/.bashrc` 의 `a2-scenario()` 함수가 UI 전에 `ros2 launch openarmx_pick openarmx_movel_bimanual.launch.py &` 로 cyclo 를 백그라운드 자동 기동하고 있었음. (그 외 자동기동 경로는 없음 — scenario_ui.launch.py 는 `--no-auto`+follower=moveit 라 cyclo 안 띄움, scenario_player_with_ee_leader 는 수동 전용, main_window cyclo_extras 는 follower=cyclo 명시 시만.)
+
+### 수정
+`~/.bashrc` a2-scenario 에서 cyclo launch 줄(+ `_cyclo_pid`/`trap`) 삭제 → UI 만 기동. cyclo 필요 시 scenario_ui Launch Manager 탭에서 수동 기동. (bashrc 는 git 밖이라 이 문서가 기록.)
+
+### 주의 (재발/적용)
+bash 함수는 터미널 시작 시 메모리 로드 → 파일 수정 후 **기존 터미널은 `source ~/.bashrc` 또는 새 터미널** 필요. `type a2-scenario` 로 movel_bimanual 줄 없으면 적용됨.

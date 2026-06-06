@@ -44,3 +44,4 @@ China 모노레포 (openarmx_ws / cyclo_control / calibration / 3d_detect_ws 등
 - [2026-06-01 YOLOv8 연속 추론 → on-demand DetectBox action server 전환](2026-06-01_yolov8_on_demand_action_server.md)
 - [2026-06-05 원격 Hailo seg 추론 지연: 마스크 후처리 병목 제거 (infer 77→31ms)](2026-06-05_remote_hailo_seg_postprocess_optimization.md)
 - [2026-06-06 box_perception 인지 지연 최적화 (검출→마커 박스당 7.2→1.3ms)](2026-06-06_box_perception_latency_optimization.md)
+- [2026-06-07 pick_and_place UI 검출/pick 지연: ros2 action send_goal CLI subprocess 콜드스타트 (~850ms vs in-process 44ms, 진단만)](2026-06-07_ui_detect_send_goal_cli_latency.md)
