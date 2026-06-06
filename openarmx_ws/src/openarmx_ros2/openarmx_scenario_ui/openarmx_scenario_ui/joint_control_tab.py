@@ -36,6 +36,11 @@ _CART_REF_FRAME = "openarmx_body_link0"
 ARM_SCALE = jd.ARM_SCALE
 GRIP_SCALE = jd.GRIP_SCALE
 
+# SIL visualisation ramp: gripper finger travel speed (m/s) used to interpolate
+# the prismatic fingers smoothly instead of teleporting. Arm joints use the
+# user-set Max-speed (deg/s); grippers are short-travel so a fixed rate suffices.
+SIL_GRIPPER_SPEED_M_S = 0.05
+
 
 class JointControlTab(QWidget):
     def __init__(self, bridge, parent=None) -> None:
@@ -62,6 +67,13 @@ class JointControlTab(QWidget):
         self._ctrl_confirmed = False  # one-time safety confirm before controller cmds
         self._ctrl_synced = False     # command spinboxes synced to actual once
         self._updating_mirror = False
+
+        # SIL visualisation ramp state: last published (interpolated) position so
+        # the simulated robot moves at the Max-speed limit instead of teleporting
+        # to each new target. Cleared whenever controllers take over /joint_states
+        # so SIL re-initialises from the current pose when it resumes.
+        self._sil_pos = {}    # {arm joint: deg}
+        self._sil_grip = {}   # {gripper joint: m}
 
         self._build_ui()
 
@@ -302,6 +314,19 @@ class JointControlTab(QWidget):
         self.spin_duration.setRange(0.1, 60.0)
         self.spin_duration.setValue(0.5)  # short horizon → responsive jogging
         self.spin_duration.setSuffix(" s")
+        self.spin_duration.setToolTip(
+            "트래젝토리 최소 이동 시간(초). 작은 이동은 이 시간으로, 큰 이동은 "
+            "Max speed 상한으로 결정됩니다 (둘 중 느린 쪽).")
+        # Per-joint angular speed cap (deg/s). Governs BOTH modes: in HIL it
+        # stretches the trajectory Duration so no joint exceeds it; in SIL it is
+        # the ramp rate of the visualisation interpolator.
+        self.spin_max_speed = QDoubleSpinBox()
+        self.spin_max_speed.setRange(1.0, 90.0)
+        self.spin_max_speed.setValue(20.0)  # conservative jog cap (URDF≈600°/s)
+        self.spin_max_speed.setSuffix(" °/s")
+        self.spin_max_speed.setToolTip(
+            "관절 최대 각속도 상한. HIL은 이 속도를 넘지 않도록 Duration을 자동 "
+            "연장하고, SIL은 이 속도로 보간 이동합니다.")
 
         self.btn_home.clicked.connect(self._on_home)
         self.btn_init.clicked.connect(self._on_init)
@@ -315,6 +340,8 @@ class JointControlTab(QWidget):
             row.addWidget(w)
         row.addWidget(QLabel("Duration:"))
         row.addWidget(self.spin_duration)
+        row.addWidget(QLabel("Max speed:"))
+        row.addWidget(self.spin_max_speed)
         row.addStretch()
         return row
 
@@ -349,6 +376,14 @@ class JointControlTab(QWidget):
     def _clamp(self, joint_name, value) -> float:
         lo, hi = jd.JOINT_LIMITS_DEG.get(joint_name, (-360.0, 360.0))
         return max(lo, min(hi, value))
+
+    @staticmethod
+    def _step_toward(cur: float, target: float, max_step: float) -> float:
+        """Move `cur` toward `target` by at most `max_step` (>=0) per call."""
+        delta = target - cur
+        if max_step <= 0.0 or abs(delta) <= max_step:
+            return target
+        return cur + math.copysign(max_step, delta)
 
     def _set_single_arm(self, name, value) -> None:
         spin = self._arm_spins.get(name)
@@ -487,24 +522,44 @@ class JointControlTab(QWidget):
 
     def _maybe_publish(self) -> None:
         """Called on every command change (slider/spinbox). Auto-routes:
-        controllers active → command them (debounced); else → /joint_states."""
+        controllers active → command them (debounced); else (SIL) → the 20 Hz
+        ramp tick (_on_sil_tick) tracks the new target at the Max-speed limit."""
         if not self._auto_publish:
             return
         if self._controllers_active():
             if not self._ensure_ctrl_ok():
                 return
             self._cmd_debounce.start(120)   # debounced trajectory send
-        else:
-            arm, grip = self._clamped_arm_grip()
-            self._bridge.publish_joint_states(arm, grip)
+        # else: SIL — do NOT publish here; _on_sil_tick ramps toward the spinbox
+        # target so the robot does not teleport past the speed-limited ramp.
 
     def _send_to_controllers(self) -> None:
-        """Send a trajectory + gripper goal to the active controllers."""
+        """Send a trajectory + gripper goal to the active controllers.
+        Duration is stretched so no joint exceeds the Max-speed limit."""
         arm, grip = self._clamped_arm_grip()
-        duration = self.spin_duration.value()
+        duration = self._speed_limited_duration(arm)
         self._bridge.send_trajectory(arm, duration)
         self._bridge.send_gripper(grip)
-        self._set_status(f"Sent to controllers (duration={duration:.1f}s)")
+        self._set_status(f"Sent to controllers (duration={duration:.2f}s)")
+
+    def _speed_limited_duration(self, arm_target: dict) -> float:
+        """Lower-bound the trajectory time so the fastest joint stays at or below
+        the Max-speed (deg/s) cap. Returns max(user Duration, time needed).
+
+        Speed is an average-velocity cap (Δangle / time); the controller's spline
+        peak may run modestly higher, but the default 30°/s sits far below the
+        URDF limit (≈600°/s) so it stays safe."""
+        user_dur = self.spin_duration.value()
+        vmax = self.spin_max_speed.value()   # deg/s
+        if vmax <= 0.0:
+            return user_dur
+        max_delta = 0.0
+        for n, tgt in arm_target.items():
+            cur = self._current.get(n)            # actual feedback (deg) if any
+            if cur is None:
+                cur = self._sil_pos.get(n, tgt)   # best-effort fallback
+            max_delta = max(max_delta, abs(tgt - cur))
+        return max(user_dur, max_delta / vmax)
 
     def _publish(self) -> None:
         """Explicit Send button: route by controller presence."""
@@ -513,9 +568,8 @@ class JointControlTab(QWidget):
                 return
             self._send_to_controllers()
         else:
-            arm, grip = self._clamped_arm_grip()
-            self._bridge.publish_joint_states(arm, grip)
-            self._set_status("Published /joint_states (SIL)")
+            # SIL — _on_sil_tick (20 Hz) ramps to the spinbox target at Max-speed.
+            self._set_status("SIL — ramping to target (Max-speed limited)")
 
     def _on_sil_tick(self) -> None:
         # When a trajectory controller is active the joint_state_broadcaster owns
@@ -526,9 +580,24 @@ class JointControlTab(QWidget):
         # dropped — freezing the joint readout and breaking Teaching Capture.
         if self._bridge.traj_subscriber_count() > 0:
             self._bridge.clear_self_echo()
+            self._sil_pos.clear()    # re-init from current pose when SIL resumes
+            self._sil_grip.clear()
             return
-        arm = {n: self._clamp(n, v) for n, v in self._get_arm_deg().items()}
-        self._bridge.publish_joint_states(arm, self._get_gripper_m())
+        # Ramp each joint toward its target by at most (Max-speed * dt) per tick
+        # so the visualised robot moves at the speed limit instead of teleporting.
+        dt = 0.05  # SIL tick period (20 Hz)
+        arm_step = max(0.0, self.spin_max_speed.value()) * dt   # deg / tick
+        grip_step = SIL_GRIPPER_SPEED_M_S * dt                  # m / tick
+        arm_target = {n: self._clamp(n, v)
+                      for n, v in self._get_arm_deg().items()}
+        for n, tgt in arm_target.items():
+            self._sil_pos[n] = self._step_toward(
+                self._sil_pos.get(n, tgt), tgt, arm_step)
+        for n, tgt in self._get_gripper_m().items():
+            self._sil_grip[n] = self._step_toward(
+                self._sil_grip.get(n, tgt), tgt, grip_step)
+        self._bridge.publish_joint_states(dict(self._sil_pos),
+                                          dict(self._sil_grip))
 
     # ------------------------------------------------------------------
     # Feedback display
