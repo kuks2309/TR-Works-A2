@@ -65,7 +65,9 @@ class BoxPerceptionNode(Node):
         self.declare_parameter("marker_size", 0.04)     # 마커 큐브 한 변(m)
         self.declare_parameter("ws_x", [0.05, 0.70])
         self.declare_parameter("ws_y_abs", 0.45)
-        self.declare_parameter("ws_z", [0.10, 0.32])
+        # 2026-06-05 raised-arm 재캘리브(+0.54 m, 보드 @ base z=0.72)에 맞춰
+        # 기존 [0.10, 0.32]를 +0.54 m 상향. 검출 박스 윗면 z≈0.78 m 가 들어옴.
+        self.declare_parameter("ws_z", [0.64, 0.86])
         gp = self.get_parameter
         self.base = str(gp("base_frame").value)
         self.cam = str(gp("camera_frame").value)
@@ -77,6 +79,7 @@ class BoxPerceptionNode(Node):
 
         self.bridge = CvBridge()
         self.depth = None
+        self._depth_msg = None
         self.fx = self.fy = self.cx = self.cy = None
 
         self.tf_buffer = Buffer()
@@ -102,7 +105,16 @@ class BoxPerceptionNode(Node):
 
     # ---- sensors ----
     def _on_depth(self, m):
-        self.depth = self.bridge.imgmsg_to_cv2(m, "passthrough")
+        # Store the raw message only. Decoding every depth frame (~30 Hz) on the
+        # single executor thread starved _on_detections; decode lazily once per goal.
+        self._depth_msg = m
+
+    def _latest_depth(self):
+        """Latest aligned depth as a uint16 HxW view (no copy, no cv_bridge)."""
+        m = self._depth_msg
+        if m is None:
+            return None
+        return np.frombuffer(m.data, dtype=np.uint16).reshape(m.height, m.width)
 
     def _on_ci(self, m):
         if self.fx is None:
@@ -127,11 +139,11 @@ class BoxPerceptionNode(Node):
         x1, y1, x2, y2 = max(0, x1), max(0, y1), min(W, x2), min(H, y2)
         if x2 <= x1 or y2 <= y1:
             return None
-        roi = self.depth[y1:y2, x1:x2].astype(float) / 1000.0
-        vv, uu = np.where(roi > 0)
+        roi = self.depth[y1:y2, x1:x2]                  # uint16 view (mm), no copy
+        vv, uu = np.nonzero(roi)                         # valid (>0) pixels
         if uu.size < 20:
             return None
-        zz = roi[vv, uu]
+        zz = roi[vv, uu].astype(np.float32) * 1e-3       # convert valid pixels only -> m
         z_near = np.percentile(zz, 5)
         top = zz < (z_near + 0.03)
         if top.sum() < 10:
@@ -141,20 +153,22 @@ class BoxPerceptionNode(Node):
         Y = (v - self.cy) * z / self.fy
         return [float(np.mean(X)), float(np.mean(Y)), float(np.mean(z))]
 
-    def _cam_to_base(self, p):
-        tf = self._tf(self.base, self.cam)
-        if tf is None:
-            return None
-        q, t = tf.rotation, tf.translation
-        R = quat_to_R([q.x, q.y, q.z, q.w])
-        return (R @ np.array(p) + np.array([t.x, t.y, t.z])).tolist()
-
     # ---- detections -> poses + markers ----
     def _on_detections(self, msg):
         try:
             dets = json.loads(msg.data).get("detections", [])
         except Exception:
             return
+        # Decode depth once per goal (lazy view) and resolve the camera->base TF
+        # once (identical for every box this frame) instead of once per detection.
+        self.depth = self._latest_depth()
+        tf = self._tf(self.base, self.cam)
+        if tf is None:
+            self.get_logger().warning("camera->base TF unavailable; skipping frame")
+            return
+        q, t = tf.rotation, tf.translation
+        R = quat_to_R([q.x, q.y, q.z, q.w])
+        tvec = np.array([t.x, t.y, t.z])
         boxes = []
         for d in dets:
             if float(d.get("confidence", 0.0)) < self.min_conf:
@@ -165,9 +179,7 @@ class BoxPerceptionNode(Node):
             p = self._point3d(bbox)
             if p is None:
                 continue
-            b = self._cam_to_base(p)
-            if b is None:
-                continue
+            b = (R @ np.asarray(p) + tvec).tolist()
             if (self.ws_x[0] < b[0] < self.ws_x[1] and abs(b[1]) < self.ws_y
                     and self.ws_z[0] < b[2] < self.ws_z[1]):
                 boxes.append({"base": b, "cls": d.get("class_name", ""),
