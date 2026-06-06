@@ -102,17 +102,18 @@ PRESETS = [
         "procs": ["controller_manager spawner"],
     },
     # 중력 보상 토글 — Start/Stop 대신 체크박스(control:"checkbox")로 렌더된다.
-    # ON  : gravity_comp.launch.py 기동 (좌·우 forward_effort_controller 를
-    #       --unload-on-kill 로 스폰 + gravity_comp_node 양팔 g(q) 피드포워드).
-    # OFF : enable_compensation=false 로 토크를 먼저 0 으로 만든 뒤 launch 종료
-    #       → SIGINT 가 --unload-on-kill 을 발동시켜 effort 컨트롤러가 깨끗이
-    #       unload (모터에 잔여 피드포워드 토크가 남지 않음).
+    # ON  : gravity_comp.launch.py 기동 (좌·우 forward_effort_controller 스폰 후
+    #       spawner 종료·컨트롤러 잔존 + gravity_comp_node 양팔 g(q) 피드포워드).
+    # OFF : enable_compensation=false 로 토크를 먼저 0 으로 만든 뒤(노드가 0 발행 →
+    #       effort 컨트롤러 출력 0) launch 종료. 컨트롤러는 잔존하되 0 을 출력하므로
+    #       잔여 토크 없음. (--unload-on-kill 미사용: spawner 사망 시 컨트롤러가
+    #       조용히 언로드돼 보상이 무력화되던 결함 차단, 2026-06-07.)
     {
         "key": "gravity_comp",
         "group": "L1 · 컨트롤러 (Controllers) — L0 필요",
         "label": "중력 보상 (Gravity Comp) — 양팔 g(q) 피드포워드 (L1 컨트롤러 필요)",
         "cmd": ["ros2", "launch", "openarmx_gravity_comp",
-                "gravity_comp.launch.py", "g_scale:=1.0"],
+                "gravity_comp.launch.py", "g_scale:=0.95"],
         "control": "checkbox",
         "confirm": False,
         "nodes": ["/gravity_comp_node"],
@@ -514,8 +515,9 @@ class LaunchManagerTab(QWidget):
         else:
             # Clear the feedforward FIRST: set enable_compensation=false so the
             # node publishes zeros (effort controllers output 0), THEN stop the
-            # launch — its --unload-on-kill spawner unloads the effort
-            # controllers on SIGINT. Double-safety against stale motor torque.
+            # launch. The effort controllers persist (no --unload-on-kill), but
+            # they now output 0 → no stale motor torque. This is the sole stop
+            # safety; do NOT rely on the spawner to unload (it may already be gone).
             try:
                 subprocess.run(
                     ["ros2", "param", "set", "/gravity_comp_node",
