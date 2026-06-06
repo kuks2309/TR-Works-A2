@@ -19,8 +19,9 @@ from datetime import datetime
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
-    QApplication, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout,
+    QWidget,
 )
 
 from openarmx_scenario_ui.managed_process import ManagedProcess
@@ -99,6 +100,24 @@ PRESETS = [
         "nodes": ["/left_joint_trajectory_controller",
                   "/right_joint_trajectory_controller"],
         "procs": ["controller_manager spawner"],
+    },
+    # 중력 보상 토글 — Start/Stop 대신 체크박스(control:"checkbox")로 렌더된다.
+    # ON  : gravity_comp.launch.py 기동 (좌·우 forward_effort_controller 를
+    #       --unload-on-kill 로 스폰 + gravity_comp_node 양팔 g(q) 피드포워드).
+    # OFF : enable_compensation=false 로 토크를 먼저 0 으로 만든 뒤 launch 종료
+    #       → SIGINT 가 --unload-on-kill 을 발동시켜 effort 컨트롤러가 깨끗이
+    #       unload (모터에 잔여 피드포워드 토크가 남지 않음).
+    {
+        "key": "gravity_comp",
+        "group": "L1 · 컨트롤러 (Controllers) — L0 필요",
+        "label": "중력 보상 (Gravity Comp) — 양팔 g(q) 피드포워드 (L1 컨트롤러 필요)",
+        "cmd": ["ros2", "launch", "openarmx_gravity_comp",
+                "gravity_comp.launch.py", "g_scale:=1.0"],
+        "control": "checkbox",
+        "confirm": False,
+        "nodes": ["/gravity_comp_node"],
+        "procs": ["gravity_comp.launch"],
+        "sweep": ["gravity_comp_node"],
     },
     # ---- L2 모션 / 플래너 (Motion) — L1 필요 ----
     {
@@ -239,6 +258,26 @@ class LaunchManagerTab(QWidget):
             name = QLabel(preset["label"])
             name.setStyleSheet("padding-left:10px;")
             grid.addWidget(name, row, 0)
+            # Checkbox-controlled target (gravity comp): a single ON/OFF toggle
+            # in the buttons cell instead of Start/Stop. _refresh keeps it in
+            # sync with the actual node state (blockSignals to avoid recursion).
+            if preset.get("control") == "checkbox":
+                chk_cell = QWidget()
+                ch = QHBoxLayout(chk_cell)
+                ch.setContentsMargins(0, 0, 0, 0)
+                chk = QCheckBox("실행")
+                chk.setMinimumHeight(_BTN_H)
+                chk.toggled.connect(self._on_gravity_toggled)
+                ch.addWidget(chk)
+                ch.addStretch()
+                grid.addWidget(chk_cell, row, 1)
+                status = QLabel("● Stopped")
+                status.setStyleSheet("color:gray;")
+                grid.addWidget(status, row, 2)
+                self._gravity_check = chk
+                self._gravity_status = status
+                row += 1
+                continue
             # Start + Stop grouped together in the single 25% buttons cell.
             btn_cell = QWidget()
             bh = QHBoxLayout(btn_cell)
@@ -462,6 +501,31 @@ class LaunchManagerTab(QWidget):
         self._set_status(f"Stopped: {label}")
         self._refresh()
 
+    def _on_gravity_toggled(self, checked: bool) -> None:
+        """Gravity-compensation checkbox: start the launch on check, stop it on
+        uncheck. _refresh re-syncs the checkbox to the real node state, so a
+        cancelled start (duplicate prompt) or external start self-corrects."""
+        key = "gravity_comp"
+        if checked:
+            # _start does duplicate detection (warns if gravity_comp_node is
+            # already up elsewhere). Needs L1 controllers — the launch's spawner
+            # loads the forward_effort_controllers onto controller_manager.
+            self._start(key)
+        else:
+            # Clear the feedforward FIRST: set enable_compensation=false so the
+            # node publishes zeros (effort controllers output 0), THEN stop the
+            # launch — its --unload-on-kill spawner unloads the effort
+            # controllers on SIGINT. Double-safety against stale motor torque.
+            try:
+                subprocess.run(
+                    ["ros2", "param", "set", "/gravity_comp_node",
+                     "enable_compensation", "false"],
+                    capture_output=True, timeout=5)
+            except Exception:
+                pass
+            time.sleep(0.3)
+            self._stop(key)
+
     def _stop_all(self) -> None:
         # [종료 낙하 방지 2026-06-07] HW proc 를 내리기 전에 팔을 HOME 으로 보내 도착 대기.
         # proc.stop() 이 컨트롤러를 죽이면 토크가 끊겨 팔이 낙하하기 때문. (컨트롤러 active 시만)
@@ -500,6 +564,25 @@ class LaunchManagerTab(QWidget):
         else:
             self._custom_status.setText("● Stopped")
             self._custom_status.setStyleSheet("color:gray;")
+        # gravity comp checkbox (rendered outside _rows) — keep the toggle in
+        # sync with the real node state; blockSignals so setChecked doesn't
+        # re-fire _on_gravity_toggled.
+        if hasattr(self, "_gravity_check"):
+            gp = self._preset("gravity_comp")
+            this_tab = self._procs["gravity_comp"].running
+            running = this_tab or self._detect_external(gp, cmdlines)
+            self._gravity_check.blockSignals(True)
+            self._gravity_check.setChecked(running)
+            self._gravity_check.blockSignals(False)
+            if this_tab:
+                self._gravity_status.setText("● Running (this tab)")
+                self._gravity_status.setStyleSheet("color:#080; font-weight:bold;")
+            elif running:
+                self._gravity_status.setText("● Running (external)")
+                self._gravity_status.setStyleSheet("color:#d80;")
+            else:
+                self._gravity_status.setText("● Stopped")
+                self._gravity_status.setStyleSheet("color:gray;")
 
     def _set_status(self, text: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
