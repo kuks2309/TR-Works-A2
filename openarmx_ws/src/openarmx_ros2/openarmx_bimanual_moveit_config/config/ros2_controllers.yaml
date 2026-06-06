@@ -23,6 +23,15 @@ controller_manager:
     right_joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
+    # [B — China 2026-06-06] cyclo 직접제어용 position passthrough 컨트롤러.
+    # cyclo 가 매 틱(100Hz) 계산한 관절 위치를 재계획 없이 하드웨어 position 에 그대로 write.
+    # JTC 와 position 인터페이스를 공유하므로 동시 active 금지(백엔드별 switch_controller).
+    left_arm_position_controller:
+      type: position_controllers/JointGroupPositionController
+
+    right_arm_position_controller:
+      type: position_controllers/JointGroupPositionController
+
     left_gripper_controller:
       type: position_controllers/GripperActionController
 
@@ -49,6 +58,10 @@ left_joint_trajectory_controller:
       - velocity
       - effort
 
+    # [jog 풀림 수정 2026-06-07] 새 궤적을 '마지막 명령값'에서 시작 (측정 actual 리셋 안 함).
+    # 기본 false 는 처진 actual 에서 시작 → desired 계단하강 → 홀딩 토크 붕괴 → 풀림.
+    open_loop_control: true
+
 right_joint_trajectory_controller:
   ros__parameters:
     joints:
@@ -65,6 +78,33 @@ right_joint_trajectory_controller:
       - position
       - velocity
       - effort
+
+    # [jog 풀림 수정 2026-06-07] 새 궤적을 '마지막 명령값'에서 시작 (측정 actual 리셋 안 함).
+    # 기본 false 는 처진 actual 에서 시작 → desired 계단하강 → 홀딩 토크 붕괴 → 풀림.
+    open_loop_control: true
+
+# [B — China] cyclo 직접제어용 position passthrough (JTC 대체, 매-틱 위치 직접 write).
+left_arm_position_controller:
+  ros__parameters:
+    joints:
+      - openarmx_left_joint1
+      - openarmx_left_joint2
+      - openarmx_left_joint3
+      - openarmx_left_joint4
+      - openarmx_left_joint5
+      - openarmx_left_joint6
+      - openarmx_left_joint7
+
+right_arm_position_controller:
+  ros__parameters:
+    joints:
+      - openarmx_right_joint1
+      - openarmx_right_joint2
+      - openarmx_right_joint3
+      - openarmx_right_joint4
+      - openarmx_right_joint5
+      - openarmx_right_joint6
+      - openarmx_right_joint7
 
 left_gripper_controller:
   ros__parameters:

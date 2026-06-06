@@ -27,6 +27,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
@@ -53,6 +54,12 @@ private:
   void extractJointStates(const sensor_msgs::msg::JointState::SharedPtr & msg);
   void publishCurrentPose(const Eigen::Affine3d & pose) const;
   void publishTrajectory(const Eigen::VectorXd & q_command) const;
+  // [A — China 2026-06-06] MoveL 전체 궤적을 open-loop로 미리 적분해 다중점 1개로 발행.
+  // cyclo가 100Hz 단발 궤적을 JTC에 스트리밍하면 JTC가 매 수신마다 (중력에 처지는)
+  // 실측위치에서 재계획해 명령이 떨어지는 팔을 따라 내려가 자유낙하/점프가 발생함
+  // (검증: 2026-06-06 HIL replay/single-cmd 대조). 전체 궤적을 한 메시지로 보내면
+  // JTC가 트래젝토리 실행기로 정상 동작해 자유낙하 없음.
+  void precomputeAndPublishTrajectory();
   void publishControllerError(const std::string & error) const;
   bool jointStateTimedOut() const;
   void syncCommandStateToFeedback();
@@ -87,6 +94,8 @@ private:
   std::string controlled_link_;
   std::string joint_states_topic_;
   std::string joint_command_topic_;
+  std::string output_mode_;            // [B] "jtc" | "forward"
+  std::string forward_command_topic_;  // [B] forward 모드 발행 토픽(passthrough /commands)
   std::string movel_topic_;
   std::string ee_pose_topic_;
   std::string controller_error_topic_;
@@ -95,6 +104,7 @@ private:
   rclcpp::Subscription<openarmx_scenario_player_msgs::msg::MoveL>::SharedPtr movel_sub_;
 
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_command_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr forward_command_pub_;  // [B] 직접제어
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ee_pose_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr controller_error_pub_;
 
@@ -117,6 +127,7 @@ private:
   bool movel_target_initialized_;
   bool movel_trajectory_active_;
   bool joint_state_timeout_active_ = false;
+  bool batch_trajectory_ = true;  // [A — China] true=전체궤적 1회발행, false=원본 100Hz 스트리밍
 
   rclcpp::Time motion_start_time_;
   rclcpp::Time last_joint_state_time_;

@@ -69,6 +69,16 @@ OmxMoveLControllerNode::OmxMoveLControllerNode()
   weight_task_position_ = this->declare_parameter("weight_task_position", 10.0);
   weight_task_orientation_ = this->declare_parameter("weight_task_orientation", 1.0);
   movel_topic_ = this->declare_parameter("movel_topic", std::string("~/movel"));
+  // [A — China 2026-06-06] true=MoveL 전체 궤적을 다중점 1개로 발행(JTC 정상 사용),
+  // false=원본 ROBOTIS 방식(매 틱 단발 궤적 100Hz 스트리밍). HIL 자유낙하 회피 위해 기본 true.
+  batch_trajectory_ = this->declare_parameter("batch_trajectory", true);
+  // [B — China 2026-06-06] cyclo 는 매 틱(100Hz) 위치를 계산하는 위치 제어 컨트롤러다.
+  // 이 매-틱 위치 명령은 트래젝토리 실행기(JTC)가 아니라 하드웨어 position 에 직접 가야 한다.
+  // output_mode: "jtc"(JointTrajectory→JTC, 기존) | "forward"(Float64MultiArray→position
+  // passthrough 컨트롤러, 매-틱 위치 직접 전달). forward 면 batch 무시하고 매-틱 스트리밍.
+  output_mode_ = this->declare_parameter("output_mode", std::string("jtc"));
+  forward_command_topic_ =
+    this->declare_parameter("forward_command_topic", std::string("~/forward_command"));
 
   if (urdf_path_.empty()) {
     RCLCPP_FATAL(this->get_logger(), "URDF path not provided.");
@@ -78,6 +88,8 @@ OmxMoveLControllerNode::OmxMoveLControllerNode()
 
   joint_command_pub_ =
     this->create_publisher<trajectory_msgs::msg::JointTrajectory>(joint_command_topic_, 10);
+  forward_command_pub_ =
+    this->create_publisher<std_msgs::msg::Float64MultiArray>(forward_command_topic_, 10);
   ee_pose_pub_ =
     this->create_publisher<geometry_msgs::msg::PoseStamped>(ee_pose_topic_, 10);
   controller_error_pub_ =
@@ -182,8 +194,15 @@ void OmxMoveLControllerNode::publishCurrentPose(const Eigen::Affine3d & pose) co
 
 void OmxMoveLControllerNode::publishTrajectory(const Eigen::VectorXd & q_command) const
 {
-  joint_command_pub_->publish(
-    trajectory_utils::makeJointTrajectoryMsg(model_joint_names_, trajectory_time_, q_command));
+  if (output_mode_ == "forward") {
+    // [B] 매-틱 위치를 position passthrough 컨트롤러로 직접 전달(재계획·궤적해석 없음).
+    std_msgs::msg::Float64MultiArray msg;
+    msg.data.assign(q_command.data(), q_command.data() + q_command.size());
+    forward_command_pub_->publish(msg);
+  } else {
+    joint_command_pub_->publish(
+      trajectory_utils::makeJointTrajectoryMsg(model_joint_names_, trajectory_time_, q_command));
+  }
 }
 
 void OmxMoveLControllerNode::publishControllerError(const std::string & error) const
@@ -235,6 +254,12 @@ void OmxMoveLControllerNode::moveLCallback(const openarmx_scenario_player_msgs::
   motion_start_time_ = this->now();
   movel_target_initialized_ = true;
   movel_trajectory_active_ = requested_duration > -1.0;
+
+  // [A — China] batch 모드(output_mode=jtc 일 때만): 전체 궤적을 endpoint 1점으로 미리
+  // 발행하고 스트리밍을 끈다. forward 모드(B)는 매-틱 스트리밍이 목적이므로 batch 건너뜀.
+  if (batch_trajectory_ && output_mode_ == "jtc" && movel_trajectory_active_) {
+    precomputeAndPublishTrajectory();
+  }
 }
 
 cyclo_motion_controller::common::Vector6d OmxMoveLControllerNode::computeDesiredVelocity(
@@ -246,6 +271,86 @@ cyclo_motion_controller::common::Vector6d OmxMoveLControllerNode::computeDesired
   return pose_utils::computeDesiredVelocity(
     current_pose, goal_pose, kp_position_, kp_orientation_,
     feedforward_linear, feedforward_angular);
+}
+
+void OmxMoveLControllerNode::precomputeAndPublishTrajectory()
+{
+  namespace math_utils = cyclo_motion_controller::common::math_utils;
+  const int dof = kinematics_solver_->getDof();
+  const double dt = std::max(1e-6, time_step_);
+  const double duration = active_motion_duration_;
+  const int steps = std::max(1, static_cast<int>(std::ceil(duration / dt)));
+
+  // 시작 = 동기화된 명령상태(=측정값). control loop가 open-loop(q_feedback=q_commanded_)라
+  // 전체 궤적을 결정적으로 미리 적분할 수 있다(매-틱 스트리밍과 동일한 q 시퀀스).
+  Eigen::VectorXd q = q_commanded_;
+
+  // 가중치 (controlLoopCallback과 동일)
+  cyclo_motion_controller::common::Vector6d task_weight =
+    cyclo_motion_controller::common::Vector6d::Zero();
+  task_weight.head<3>().setConstant(weight_task_position_);
+  task_weight.tail<3>().setConstant(weight_task_orientation_);
+  const Eigen::VectorXd damping_weight = Eigen::VectorXd::Ones(dof) * weight_damping_;
+
+  // KinematicsSolver에 역기구학(IK)이 없으므로, control loop와 동일한 cubic+QP를
+  // open-loop로 목표까지 적분해 endpoint(목표 관절각)만 구한다(경로점은 버린다).
+  for (int k = 1; k <= steps; ++k) {
+    const double elapsed = std::min(static_cast<double>(k) * dt, duration);
+
+    kinematics_solver_->updateState(q, qdot_);
+    const Eigen::Affine3d current_pose = kinematics_solver_->getPose(controlled_link_);
+
+    const Eigen::Vector3d linear_ref = math_utils::cubicDotVector<3>(
+      elapsed, 0.0, duration,
+      movel_start_pose_.translation(), movel_goal_pose_.translation(),
+      Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    const Eigen::Vector3d position_ref = math_utils::cubicVector<3>(
+      elapsed, 0.0, duration,
+      movel_start_pose_.translation(), movel_goal_pose_.translation(),
+      Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    const Eigen::Matrix3d rotation_ref = math_utils::rotationCubic(
+      elapsed, 0.0, duration,
+      movel_start_pose_.linear(), movel_goal_pose_.linear());
+    const Eigen::Vector3d angular_ref = math_utils::rotationCubicDot(
+      elapsed, 0.0, duration,
+      Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
+      movel_start_pose_.linear(), movel_goal_pose_.linear());
+
+    Eigen::Affine3d pose_ref = Eigen::Affine3d::Identity();
+    pose_ref.translation() = position_ref;
+    pose_ref.linear() = rotation_ref;
+
+    const cyclo_motion_controller::common::Vector6d desired_task_vel =
+      computeDesiredVelocity(current_pose, pose_ref, linear_ref, angular_ref);
+
+    qp_controller_->setDesiredTaskVel(desired_task_vel);
+    qp_controller_->setWeights(task_weight, damping_weight);
+
+    Eigen::VectorXd optimal_velocities;
+    if (!qp_controller_->getOptJointVel(optimal_velocities)) {
+      publishControllerError("OMX MoveL Controller: QP solve failed (endpoint precompute)");
+      RCLCPP_WARN(
+                this->get_logger(),
+                "Endpoint precompute QP failed at step %d/%d; aborting.", k, steps);
+      movel_trajectory_active_ = false;
+      return;
+    }
+
+    q = q + optimal_velocities * dt;
+  }
+
+  // endpoint 1점만 발행 — JTC가 현재위치→endpoint를 duration에 걸쳐 보간(스트리밍 없음).
+  joint_command_pub_->publish(
+    trajectory_utils::makeJointTrajectoryMsg(model_joint_names_, duration, q));
+
+  // 최종 명령상태로 갱신하고 스트리밍 비활성화 → control loop는 else 분기에서 return(양보).
+  q_commanded_ = q;
+  movel_trajectory_active_ = false;
+
+  RCLCPP_INFO(
+            this->get_logger(),
+            "MoveL endpoint published as single point (duration %.2fs, no 100Hz streaming).",
+            duration);
 }
 
 void OmxMoveLControllerNode::controlLoopCallback()
@@ -271,6 +376,12 @@ void OmxMoveLControllerNode::controlLoopCallback()
   }
 
   try {
+    // [open-loop 복원 — 2026-06-06] 제어루프는 q_commanded_(자체 적분 명령상태)를 피드백으로
+    // 쓴다(ROBOTIS 원본 방식). 큐빅 궤적을 q_commanded_가 적분해 목표에 도달 후 멈추므로,
+    // 하드웨어 지연이 있어도 명령이 과도하게 램프하지 않는다. (closed-loop(q_feedback=q_)는
+    // 지연된 실제값 기준이라 오차가 안 닫혀 over-swing/방향오류 발생 — 하드웨어 검증.
+    // 앞서 의심한 "개루프 발산"의 진짜 원인은 UI dual-publish로 인한 joint_index_map 손상이었고
+    // 그건 별도 수정됨.) MoveL 콜백의 sync가 매 명령 시작 시 q_commanded_=q_(실측)로 재기준화.
     const Eigen::VectorXd q_feedback = q_commanded_;
     kinematics_solver_->updateState(q_feedback, qdot_);
     const Eigen::Affine3d current_pose = kinematics_solver_->getPose(controlled_link_);
@@ -326,12 +437,12 @@ void OmxMoveLControllerNode::controlLoopCallback()
       if (movel_trajectory_active_) {
         movel_trajectory_active_ = false;
       }
-      // Trajectory time elapsed — motion is finished. Stop publishing.
-      // The post-elapse kp*error pull (computeDesiredVelocity to goal) was
-      // the original leader-follower streaming design but with JTC +
-      // mock_components it caused perpetual ±0.01 rad oscillation at 100Hz.
-      // Holding the last commanded pose is handled by the trajectory
-      // controller's internal state; cyclo stays quiescent until a new MoveL.
+      // [China 적응 — 유지 필수] 큐빅 종료 후 cyclo는 발행을 멈추고 양보한다(quiescent).
+      // ROBOTIS 원본은 여기서 movel_goal_pose_로 계속 목표추종(kp*error)하지만, 그 거동을
+      // China에 가져오면 cyclo가 idle에도 JTC로 마지막 목표를 계속 당겨 init/joint 등
+      // 다른 컨트롤러 명령을 덮어쓴다(검증: 2026-06-06 하드웨어에서 'init 위치로 안감').
+      // China는 cyclo·pilz·joint_control이 동일 JTC를 공유하는 멀티-컨트롤러 구조라
+      // idle 시 양보(return)가 필수다. 원본 거동으로 되돌리지 말 것.
       return;
     }
 

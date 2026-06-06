@@ -12,7 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 from PyQt5 import uic
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
-    QFileDialog, QMainWindow, QMessageBox, QTabWidget,
+    QApplication, QFileDialog, QMainWindow, QMessageBox, QTabWidget,
 )
 
 from openarmx_scenario_ui.camera_tab import CameraTab
@@ -88,7 +88,10 @@ AUTO_REFRESH_DELAY_MS = 10000
 
 class ScenarioMainWindow(QMainWindow):
     def __init__(self, auto_start: bool = True, with_rviz: bool = True,
-                 follower: str = "cyclo") -> None:
+                 # [cyclo 자동기동 제거 2026-06-07] 기본 follower 를 cyclo→moveit 로 변경:
+                 # cyclo_extras(cyclo_sim + vr_controller)는 --follower cyclo 로 명시할 때만
+                 # 기동(사용자가 요청한 적 없는 자동기동 제거). scenario_ui.py 기본도 moveit.
+                 follower: str = "moveit") -> None:
         super().__init__()
         ui_path = os.path.join(
             get_package_share_directory("openarmx_scenario_ui"),
@@ -130,7 +133,7 @@ class ScenarioMainWindow(QMainWindow):
         self._tabs.addTab(self._cart_tab, "Cartesian Control")
         self._teaching_tab = TeachingTab(self._bridge, parent=self)
         self._tabs.addTab(self._teaching_tab, "Teaching")
-        self._pnp_tab = PickAndPlaceTab(parent=self)
+        self._pnp_tab = PickAndPlaceTab(self._bridge, parent=self)
         self._tabs.addTab(self._pnp_tab, "Pick and Place")
         self._camera_tab = CameraTab(self._bridge, parent=self)
         self._tabs.addTab(self._camera_tab, "Camera")
@@ -413,6 +416,13 @@ class ScenarioMainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event) -> None:
+        # [종료 낙하 방지 2026-06-07] 컨트롤러가 살아있는 동안 양팔을 HOME(0°)으로 보내고
+        # 도착을 기다린 뒤 하드웨어를 내린다. 그렇지 않으면 아래 _hw.stop() 가 MIT 모터
+        # 토크를 즉시 끊어 팔이 중력으로 낙하한다. (그레이스풀 종료 한정 — kill_all/크래시엔 무력)
+        try:
+            self._bridge.park_arms_home(tick=QApplication.processEvents)
+        except Exception:
+            pass
         self._status_timer.stop()
         self._joint_tab.shutdown()
         self._cart_tab.shutdown()

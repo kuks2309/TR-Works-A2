@@ -18,6 +18,7 @@ MoveIt Pilz)의 ``AlignToBoxes`` 액션 골을 보내 박스를 감지→좌/우
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 from datetime import datetime
@@ -45,6 +46,12 @@ BACKENDS = {
         "action": "/openarmx/pilz_align_to_boxes",
         "type": "openarmx_pilz_box_align_msgs/action/AlignToBoxes",
         "pilz_fields": True,
+    },
+    "ptp": {
+        "label": "ptp  (Pinocchio 역기구학 · 단일점 직결 · 툴센터)",
+        "action": "/openarmx/ptp_align_to_boxes",
+        "type": "openarmx_ptp_box_align_msgs/action/AlignToBoxes",
+        "pilz_fields": False,
     },
 }
 
@@ -82,6 +89,7 @@ DETECT_CMD = [
 BACKEND_LAUNCH = {
     "cyclo": ["ros2", "launch", "openarmx_cyclo_box_align", "box_align.launch.py"],
     "pilz": ["ros2", "launch", "openarmx_pilz_box_align", "pilz_box_align.launch.py"],
+    "ptp": ["ros2", "launch", "openarmx_ptp_box_align", "ptp_box_align.launch.py"],
 }
 
 # 외부(이 탭 밖)에서 이미 떠 있는지 pgrep 패턴.
@@ -91,6 +99,7 @@ EXT_DETECT = "yolov8_node|yolo_remote_node"
 BACKEND_EXT = {
     "cyclo": "openarmx_cyclo_box_align",
     "pilz": "pilz_box_align_node",
+    "ptp": "ptp_box_align_node",
 }
 
 # Launch Manager 와 동일한 Start=초록 / Cancel=빨강 버튼 스타일(미러링).
@@ -110,8 +119,12 @@ _HDR_QSS = "color:#1565c0; padding-top:8px; font-weight:bold;"
 
 
 class PickAndPlaceTab(QWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, bridge=None, parent=None) -> None:
         super().__init__(parent)
+        self._bridge = bridge
+        # 라이브 자세 readout 라벨: {arm: {axis 또는 joint이름: QLabel}}
+        self._cart_labels = {"left": {}, "right": {}}
+        self._joint_labels = {"left": {}, "right": {}}
         self._proc = QProcess(self)
         self._proc.setProcessChannelMode(QProcess.MergedChannels)
         self._proc.readyReadStandardOutput.connect(self._on_output)
@@ -132,9 +145,25 @@ class PickAndPlaceTab(QWidget):
         self._status_timer.start(2000)
         self._refresh_status()
 
+        # 라이브 자세 readout: joint 은 bridge 신호(이미 deg)로, Cartesian(TCP)은
+        # 2Hz TF 로 갱신. bridge 가 있을 때만(독립 실행 대비 방어).
+        if self._bridge is not None:
+            self._bridge.sig_joint_state.connect(self._on_joint_state)
+            self._readout_timer = QTimer(self)
+            self._readout_timer.timeout.connect(self._refresh_readout)
+            self._readout_timer.start(500)
+            self._refresh_readout()
+
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+
+        # 상단: 좌측열(센서/백엔드/launch 그룹) + 우측 라이브 자세 readout 패널.
+        top_row = QHBoxLayout()
+        left_col = QVBoxLayout()
+        top_row.addLayout(left_col, 3)
+        top_row.addWidget(self._build_readout(), 2)
+        root.addLayout(top_row)
 
         # --- 센서 (D435 카메라) — Start/Stop ------------------------------
         sgrp = QGroupBox("센서 (D435 카메라 · RealSense)")
@@ -153,7 +182,7 @@ class PickAndPlaceTab(QWidget):
         srow.addWidget(self._btn_cam_stop)
         srow.addWidget(self._lbl_cam)
         srow.addStretch()
-        root.addWidget(sgrp)
+        left_col.addWidget(sgrp)
 
         # --- 백엔드 선택 -------------------------------------------------
         bgrp = QGroupBox("백엔드 (Motion Backend)")
@@ -165,9 +194,9 @@ class PickAndPlaceTab(QWidget):
             self._backend_btns[key] = rb
             self._backend_group.addButton(rb)
             brow.addWidget(rb)
-        self._backend_btns["pilz"].setChecked(True)  # default (연결 전이라 핸들러 미발화)
+        self._backend_btns["ptp"].setChecked(True)  # default (연결 전이라 핸들러 미발화)
         brow.addStretch()
-        root.addWidget(bgrp)
+        left_col.addWidget(bgrp)
 
         # --- 검출 · 백엔드 기동 (Launch) ---------------------------------
         lgrp = QGroupBox("검출 · 백엔드 기동 (Launch)")
@@ -218,7 +247,8 @@ class PickAndPlaceTab(QWidget):
         lgrid.addWidget(self._btn_be_stop, 1, 1)
         lgrid.addWidget(self._lbl_be, 1, 2)
         lgrid.setColumnStretch(4, 1)
-        root.addWidget(lgrp)
+        left_col.addWidget(lgrp)
+        left_col.addStretch()
 
         # --- AlignToBoxes 골 파라미터 ------------------------------------
         pgrp = QGroupBox("AlignToBoxes 골 파라미터")
@@ -236,7 +266,9 @@ class PickAndPlaceTab(QWidget):
                 s.setSuffix(suffix)
             return s
 
-        self._z = spin(0.0, 1.0, 0.01, 0.40, 3, " m")        # link7 절대 높이
+        # 절대 높이(base). 기본 백엔드 ptp는 TCP(hand_tcp) 기준 → 운용 픽 높이 ≈0.80
+        # (책상 0.72m, 박스 top≈0.78). pilz는 link7 기준이라 ≈0.94~0.98로 올려야 함.
+        self._z = spin(0.0, 1.2, 0.01, 0.80, 3, " m")
         self._roll = spin(-180.0, 180.0, 1.0, 180.0, 1, " °")  # 기본 수직하강
         self._pitch = spin(-180.0, 180.0, 1.0, 0.0, 1, " °")
         self._yaw = spin(-180.0, 180.0, 1.0, 0.0, 1, " °")
@@ -330,11 +362,80 @@ class PickAndPlaceTab(QWidget):
             rb.toggled.connect(self._on_backend_changed)
 
     # --------------------------------------------------------------- helpers
+    # ------------------------------------------------------ live pose readout
+    _RO_VAL_QSS = ("background:#f5f5f5; border:1px solid #ddd; border-radius:3px; "
+                   "padding:1px 6px; font-family:monospace;")
+
+    def _build_readout(self) -> QGroupBox:
+        """우상단 라이브 자세 패널: 양팔 TCP(hand_tcp) Cartesian + Joint(deg),
+        base(openarmx_body_link0) 기준. Cartesian 은 TF, Joint 은 /joint_states."""
+        grp = QGroupBox("현재 자세 (실측 · base 기준)")
+        grid = QGridLayout(grp)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(2)
+        for c, txt in ((0, "<b>TCP</b>"), (1, "<b>Left</b>"), (2, "<b>Right</b>")):
+            grid.addWidget(QLabel(txt), 0, c)
+        r = 1
+        for label, key in (("x (m)", "x"), ("y (m)", "y"), ("z (m)", "z"),
+                           ("roll (°)", "R"), ("pitch (°)", "P"), ("yaw (°)", "Y")):
+            grid.addWidget(QLabel(label), r, 0)
+            for c, arm in ((1, "left"), (2, "right")):
+                lb = QLabel("---")
+                lb.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                lb.setStyleSheet(self._RO_VAL_QSS)
+                self._cart_labels[arm][key] = lb
+                grid.addWidget(lb, r, c)
+            r += 1
+        grid.addWidget(QLabel("<b>Joint (°)</b>"), r, 0)
+        r += 1
+        for j in range(1, 8):
+            grid.addWidget(QLabel(f"J{j}"), r, 0)
+            for c, arm in ((1, "left"), (2, "right")):
+                lb = QLabel("---")
+                lb.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                lb.setStyleSheet(self._RO_VAL_QSS)
+                self._joint_labels[arm][f"openarmx_{arm}_joint{j}"] = lb
+                grid.addWidget(lb, r, c)
+            r += 1
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        grid.setRowStretch(r, 1)
+        return grp
+
+    def _on_joint_state(self, positions: dict) -> None:
+        """bridge.sig_joint_state(dict, 팔관절은 이미 deg) -> Joint 라벨 갱신."""
+        for arm in ("left", "right"):
+            for name, lb in self._joint_labels[arm].items():
+                if name in positions:
+                    lb.setText(f"{positions[name]:+.1f}")
+
+    def _refresh_readout(self) -> None:
+        """2Hz: 양팔 hand_tcp 포즈를 TF 로 읽어 Cartesian 라벨 갱신."""
+        if self._bridge is None:
+            return
+        for arm in ("left", "right"):
+            cl = self._cart_labels[arm]
+            pose = self._bridge.get_ee_pose(
+                arm, "openarmx_body_link0", f"openarmx_{arm}_hand_tcp")
+            if not pose:
+                for lb in cl.values():
+                    lb.setText("---")
+                continue
+            cl["x"].setText(f"{pose['x']:+.4f}")
+            cl["y"].setText(f"{pose['y']:+.4f}")
+            cl["z"].setText(f"{pose['z']:+.4f}")
+            cl["R"].setText(f"{math.degrees(pose['roll']):+.1f}")
+            cl["P"].setText(f"{math.degrees(pose['pitch']):+.1f}")
+            cl["Y"].setText(f"{math.degrees(pose['yaw']):+.1f}")
+
     def _backend_key(self) -> str:
-        return "pilz" if self._backend_btns["pilz"].isChecked() else "cyclo"
+        for key, rb in self._backend_btns.items():
+            if rb.isChecked():
+                return key
+        return "ptp"
 
     def _on_backend_changed(self, *_a) -> None:
-        # pilz 전용 필드(vel_scale·planner)는 cyclo 선택 시 비활성화.
+        # pilz 전용 필드(vel_scale·planner)는 pilz 외(cyclo/ptp) 선택 시 비활성화.
         pilz = BACKENDS[self._backend_key()]["pilz_fields"]
         for w in (self._lbl_vel, self._vel, self._lbl_planner, self._planner):
             w.setEnabled(pilz)

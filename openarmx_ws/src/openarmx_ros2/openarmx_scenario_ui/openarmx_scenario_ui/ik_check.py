@@ -100,6 +100,12 @@ class LinearReachabilityChecker:
         q = np.array(q_seed, dtype=float).copy()
         if q.shape[0] != self.nq:
             return q, False, f"q_seed dim {q.shape[0]} != model.nq {self.nq}"
+        # The live joint state can sit a hair past a calibrated limit (e.g. j4 ≈
+        # -0.002 at the straight home pose vs lower=0.0). The current robot config
+        # is valid by definition, so clamp the seed into limits — otherwise a
+        # marginal seed violation vetoes the whole motion at waypoint 0 even
+        # though the requested move is feasible by bending the other joints.
+        q = np.clip(q, self.q_lo, self.q_hi)
         for _ in range(self.max_iter):
             pin.forwardKinematics(self.model, self.data, q)
             pin.updateFramePlacement(self.model, self.data, self.tcp_id)

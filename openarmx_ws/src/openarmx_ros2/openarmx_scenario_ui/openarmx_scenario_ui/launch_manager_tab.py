@@ -19,8 +19,8 @@ from datetime import datetime
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
-    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QApplication, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from openarmx_scenario_ui.managed_process import ManagedProcess
@@ -123,6 +123,12 @@ PRESETS = [
         "nodes": ["/openarmx_left_movel_controller",
                   "/openarmx_right_movel_controller"],
         "procs": ["openarmx_movel_bimanual"],
+        # [cyclo Stop 종료보장 2026-06-07] launch 파일명 패턴("openarmx_movel_bimanual")은
+        # `ros2 launch` 부모 프로세스만 매칭한다. 부모가 먼저 죽고 컨트롤러 노드만 고아로
+        # 남으면(외부 터미널 종료 등) 그 패턴이 아무것도 못 잡아 노드가 살아남는다 →
+        # Stop 이 안 듣는 것처럼 보임. 실제 노드 실행파일명을 sweep 에 넣어 좌/우
+        # omx_movel_controller_node 를 직접(그룹+PID) 종료한다.
+        "sweep": ["omx_movel_controller_node"],
     },
     # ---- 티칭 / 시각화 (Teaching / View) ----
     {
@@ -457,6 +463,13 @@ class LaunchManagerTab(QWidget):
         self._refresh()
 
     def _stop_all(self) -> None:
+        # [종료 낙하 방지 2026-06-07] HW proc 를 내리기 전에 팔을 HOME 으로 보내 도착 대기.
+        # proc.stop() 이 컨트롤러를 죽이면 토크가 끊겨 팔이 낙하하기 때문. (컨트롤러 active 시만)
+        if self._bridge is not None:
+            try:
+                self._bridge.park_arms_home(tick=QApplication.processEvents)
+            except Exception:
+                pass
         for proc in self._procs.values():
             proc.stop()
         self._set_status("Stop All (this tab) executed.")

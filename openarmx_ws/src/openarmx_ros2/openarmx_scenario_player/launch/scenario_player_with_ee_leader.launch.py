@@ -79,7 +79,10 @@ def generate_launch_description():
                          "real hardware is already providing /joint_states and "
                          "the JTCs.")),
         DeclareLaunchArgument(
-            "start_movel_controllers", default_value="true",
+            # [cyclo 자동기동 제거 2026-06-07] 사용자 요청: cyclo MoveL 은 자동기동하지 않고
+            # opt-in 으로만 켠다(start_movel_controllers:=true 또는 Launch Manager 의 cyclo
+            # 행 Start). 기본값 true→false.
+            "start_movel_controllers", default_value="false",
             description=("True spawns the cyclo single-arm MoveL controllers "
                          "(openarmx_pick/openarmx_movel_bimanual.launch.py -- "
                          "two omx_movel_controller_node instances, one per "

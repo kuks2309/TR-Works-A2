@@ -80,10 +80,11 @@ class JointControlTab(QWidget):
         # bridge feedback
         self._bridge.sig_joint_state.connect(self._on_joint_state_received)
 
-        # SIL publish (20 Hz) keeps robot_state_publisher fed.
+        # [UI 분리 — 2026-06-06] UI는 /joint_states 를 발행하지 않는다.
+        # SIL/HIL 모두 joint_state_broadcaster(fake_components / 실하드웨어)가 단일
+        # 출처. 옛 SIL 시각화 램프 타이머는 시작하지 않는다(비활성). 객체는
+        # 다른 곳의 _sil_timer.stop() 호환을 위해 생성만 유지한다.
         self._sil_timer = QTimer(self)
-        self._sil_timer.timeout.connect(self._on_sil_tick)
-        self._sil_timer.start(50)
 
         # Actual-angle display (10 Hz) + hardware watchdog.
         self._display_timer = QTimer(self)
@@ -555,9 +556,9 @@ class JointControlTab(QWidget):
             return user_dur
         max_delta = 0.0
         for n, tgt in arm_target.items():
-            cur = self._current.get(n)            # actual feedback (deg) if any
+            cur = self._current.get(n)            # actual feedback (deg) from broadcaster
             if cur is None:
-                cur = self._sil_pos.get(n, tgt)   # best-effort fallback
+                cur = tgt                         # no feedback yet → no speed stretch
             max_delta = max(max_delta, abs(tgt - cur))
         return max(user_dur, max_delta / vmax)
 

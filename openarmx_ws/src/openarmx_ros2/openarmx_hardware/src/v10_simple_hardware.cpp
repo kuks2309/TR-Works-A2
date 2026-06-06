@@ -169,13 +169,14 @@ hardware_interface::CallbackReturn OpenArmX_v10HW::on_init(
 
   // Initialize KP and KD values with defaults
   // 注意：第8个值是夹爪，增大KP/KD可提高响应速度和阻尼
-  // [JSY] calibrated 2026-06-05 from follower RIGHT+LEFT arms (can2/can3) via joint_gain_tuner.py.
-  //       Original defaults: kp {50,50,50,50,10,10,10,50}  kd {2.5,2.5,2.5,2.5,0.5,0.5,0.5,2.5}
-  //       Unified KP=170 for all arm joints j1..j7 (serves both arms); KD=2.5; 8th=gripper unchanged.
-  //       (sweep optimum was 200; lowered to 170 on request — still 0% overshoot, sse ~+18%.)
-  //       (left joint2 measured with -delta due to mirrored limits; floor ~10.5 mrad.)
-  kp_values_ = {170.0, 170.0, 170.0, 170.0, 170.0, 170.0, 170.0, 50.0};  // all arm joints=170; 夹爪=50
-  kd_values_ = {2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5};                  // j5~7 raised 0.5->2.5; 夹爪=2.5
+  // 2026-06-06: 팩토리 A2 게인으로 복원(사용자 요청). cyclo MoveL '점프'의 진짜 원인은
+  //       게인이 아니라 cyclo의 100Hz 단발 궤적 스트리밍 → JTC 재계획 자유낙하였고,
+  //       cyclo 측에서 endpoint 1점 발행(batch_trajectory)으로 해결함
+  //       (docs/issues_and_fixes/2026-06-06_..._cyclo_movel_crazy_motion.md 참조).
+  //       이전 [JSY] 2026-06-05 튜닝(KP 170→160, j5~7 KD 0.5→2.5)은 점프와 무관해 되돌림.
+  //       값은 v10_simple_hardware.cpp.bak(튜닝 전)과 동일.
+  kp_values_ = {50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 50.0};  // 팩토리: j1~4=50, j5~7=10, 夹爪=50
+  kd_values_ = {2.5, 2.5, 2.5, 2.5, 0.5, 0.5, 0.5, 2.5};          // 팩토리: j1~4=2.5, j5~7=0.5, 夹爪=2.5
 
   // Declare ROS2 parameters for KP and KD
   for (size_t i = 0; i < kp_values_.size(); ++i) {

@@ -137,6 +137,10 @@ class ScenarioRosBridge(QObject):
         self._img_sub = None
         self._cv_bridge = None
 
+        # Latest /joint_states snapshot (UI units) written on the spin thread so
+        # it stays fresh even while the Qt thread blocks (e.g. park-on-shutdown).
+        self._latest_positions = {}
+
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._spin_loop, daemon=True)
         self._thread.start()
@@ -268,9 +272,10 @@ class ScenarioRosBridge(QObject):
             reliability=QoSReliabilityPolicy.RELIABLE,
             durability=QoSDurabilityPolicy.VOLATILE,
         )
-        # SIL: publish full robot pose for robot_state_publisher / RViz.
-        self._js_pub = self._node.create_publisher(
-            JointState, "/joint_states", joint_qos)
+        # [UI 분리 — 2026-06-06] UI는 더 이상 /joint_states 를 발행하지 않는다.
+        # SIL/HIL 모두 joint_state_broadcaster(fake_components 또는 실하드웨어)가
+        # /joint_states 의 단일 출처. UI 가 함께 발행하면 다중발행자가 되어
+        # cyclo 등 구독자의 joint_index_map 이 손상될 수 있다(dual-publish 버그).
         # HIL: per-arm trajectory command publishers.
         self._traj_pub_left = self._node.create_publisher(
             JointTrajectory, jd.LEFT_TRAJ_TOPIC, joint_qos)
@@ -314,6 +319,7 @@ class ScenarioRosBridge(QObject):
                 return
         positions = {n: self._to_display(n, p)
                      for n, p in zip(msg.name, msg.position)}
+        self._latest_positions = positions   # spin-thread snapshot for park-on-exit
         self.sig_joint_state.emit(positions)
 
     @staticmethod
@@ -335,31 +341,10 @@ class ScenarioRosBridge(QObject):
             return 0
 
     def publish_joint_states(self, arm_deg: dict, gripper_m: dict) -> None:
-        """SIL: publish all joints to /joint_states (arms deg->rad, grippers m)."""
-        names, positions = [], []
-        for n in self._arm_names:
-            if n in arm_deg:
-                names.append(n)
-                positions.append(math.radians(arm_deg[n]))
-        for n in self._gripper_names:
-            if n in gripper_m:
-                names.append(n)
-                positions.append(float(gripper_m[n]))
-        msg = JointState()
-        msg.header.stamp = self._node.get_clock().now().to_msg()
-        msg.name = names
-        msg.position = positions
-        msg.velocity = [0.0] * len(names)
-        msg.effort = [0.0] * len(names)
-        self._js_pub.publish(msg)
-        # Record in display units for the self-echo filter.
-        self._last_self_publish = {}
-        for n in self._arm_names:
-            if n in arm_deg:
-                self._last_self_publish[n] = arm_deg[n]
-        for n in self._gripper_names:
-            if n in gripper_m:
-                self._last_self_publish[n] = float(gripper_m[n])
+        """[deprecated — UI 분리] UI는 /joint_states 를 발행하지 않는다.
+        SIL/HIL 모두 joint_state_broadcaster 가 단일 출처다. 호출 호환을 위해
+        시그니처만 유지하고 아무 동작도 하지 않는다(no-op)."""
+        return
 
     def send_trajectory(self, arm_deg: dict, duration_sec: float) -> None:
         """HIL: send per-arm JointTrajectory to the trajectory controllers."""
@@ -396,6 +381,42 @@ class ScenarioRosBridge(QObject):
             goal.command.position = float(gripper_m[name])
             goal.command.max_effort = float(max_effort)
             client.send_goal_async(goal)
+
+    def latest_positions(self) -> dict:
+        """Latest /joint_states in UI units (arm deg, gripper m). Updated on the
+        spin thread, so it stays current even while the Qt thread blocks."""
+        return dict(self._latest_positions)
+
+    def park_arms_home(self, speed_deg_s: float = 25.0, tol_deg: float = 2.0,
+                       extra_timeout: float = 2.0, tick=None) -> bool:
+        """Move BOTH arms to HOME (0°) and block until they arrive (or timeout).
+        Call BEFORE killing the hardware on a graceful shutdown: otherwise
+        cutting motor torque mid-air lets the arm drop under gravity (MIT mode
+        has no holding brake). Gripper is deliberately left as-is (never force
+        it — a held object could fall). Returns False if no trajectory
+        controller is active (SIL / already down) so the caller can skip.
+
+        `tick` is invoked each poll (pass QApplication.processEvents) to keep the
+        GUI responsive during the blocking wait."""
+        if self.traj_subscriber_count() <= 0:
+            return False
+        target = jd.HOME_POSITION_DEG
+        cur = self.latest_positions()
+        max_delta = max(
+            (abs(cur.get(n, 0.0) - target[n]) for n in jd.ARM_JOINT_NAMES),
+            default=0.0)
+        duration = max(1.5, max_delta / max(1.0, speed_deg_s))
+        self.send_trajectory(dict(target), duration)
+        deadline = time.monotonic() + duration + extra_timeout
+        while time.monotonic() < deadline:
+            if tick is not None:
+                tick()
+            cur = self.latest_positions()
+            if cur and all(abs(cur.get(n, 1e3) - target[n]) <= tol_deg
+                           for n in jd.ARM_JOINT_NAMES):
+                return True
+            time.sleep(0.05)
+        return True
 
     # ==================================================================
     # Diagnostics tab — node liveness + topic publish-rate monitoring

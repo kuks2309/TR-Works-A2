@@ -106,6 +106,14 @@ public:
     solver_ = OsqpEigen::Solver();
 
     solver_.settings()->setWarmStart(true);
+    // [solver 수정 2026-06-07 — China] OSQP 기본 tolerance(eps 1e-3)가 느슨해 여유자유도(7DOF
+    // vs 6D 과제)의 damping 최소화를 마무리 못 함 → 과제(EE)는 맞추나 null-space 에 군더더기
+    // (손목/어깨 ±9° contort). eps↓ + polish 로 완전 수렴시켜 분석해(최소관절)와 일치시킨다.
+    // (검증: 오프라인 OSQP repro — 기본=contort, eps1e-6+polish=깨끗. -Z 10mm 가 j4 -3°만.)
+    solver_.settings()->setAbsoluteTolerance(1e-6);
+    solver_.settings()->setRelativeTolerance(1e-6);
+    solver_.settings()->setMaxIteration(10000);
+    solver_.settings()->setPolish(true);
     solver_.settings()->getSettings()->verbose = false;
 
     solver_.data()->setNumberOfVariables(nx_);
