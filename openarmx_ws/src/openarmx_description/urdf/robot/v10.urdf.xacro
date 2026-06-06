@@ -47,10 +47,13 @@
   <xacro:arg name="left_arm_base_xyz" default="0.0 0.031 0.698" />
   <xacro:arg name="left_arm_base_rpy" default="-1.5708 0 0" /> -->
  
-  <xacro:arg name="right_arm_base_xyz" default="0.0 -0.031 1.275" />
+  <!-- arm_base z: 1.275 -> 1.244 (-31mm). FK(model) was a constant +31mm above the
+       real arm (5-pt measure ±1mm, pose-independent → arm-base calibration error, not
+       gravity sag). Fixing here (SSOT) makes full URDF/TF/IK/all backends match reality. -->
+  <xacro:arg name="right_arm_base_xyz" default="0.0 -0.031 1.244" />
   <xacro:arg name="right_arm_base_rpy" default="1.5708 0 0" />
 
-  <xacro:arg name="left_arm_base_xyz" default="0.0 0.031 1.275" />
+  <xacro:arg name="left_arm_base_xyz" default="0.0 0.031 1.244" />
   <xacro:arg name="left_arm_base_rpy" default="-1.5708 0 0" />
 
 

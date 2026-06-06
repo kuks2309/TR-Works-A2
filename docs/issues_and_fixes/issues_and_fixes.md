@@ -7,6 +7,143 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-07 05:02 (KST) — ptp 백엔드 모델 이중화 제거 리팩터 + 31mm xacro SSOT 수정 (라이브 검증완료)
+
+### 증상 / 동기
+- FK(모델)가 실제 팔보다 **상수 +31mm 높음**(5점 측정, 자세 무관 → arm-base 캘리브레이션 오차). 초기엔 (a) 명령 z에 +0.031 더하기, (b) 솔버 URDF base z 1.275→1.244 손편집으로 우회.
+- 그 결과 모델값이 **3중 분기**(솔버 URDF 1.244 vs full URDF/TF 1.275 vs xacro 1.275) → "하나만 고치니 서로 다른 값으로 이상하게 움직임". 사용자: "비정상, full urdf에서 읽어서 필요한 것만 사용해야".
+
+### 수정 1 — ptp 가 full 모델에서 런타임 축소 (이중화 제거)
+- [ptp_box_align_node.cpp](openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_box_align/src/ptp_box_align_node.cpp): 솔버 URDF 파일 로드 제거 → `/robot_description`(std_msgs/String, transient_local) 구독 → `pinocchio::buildModelFromXML`(full) → 팔별 `buildReducedModel`(상대팔+손가락 관절 lock)로 7-DOF 단일팔 모델 런타임 생성. `onRobotDescription`/`buildArmFromFull` 신설.
+- [launch](openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_box_align/launch/ptp_box_align.launch.py): `left/right_urdf_path` 인자 제거, `move_time` 기본 6.0→2.5. CMakeLists.txt/package.xml: `std_msgs` 의존 추가.
+
+### 수정 2 — 31mm 를 xacro SSOT 한 곳에서만
+- [v10.urdf.xacro:50,53](openarmx_ws/src/openarmx_description/urdf/robot/v10.urdf.xacro#L50): `right/left_arm_base_xyz` z `1.275 → 1.244`. 이게 full URDF/TF/RViz/MoveIt/모든 백엔드의 단일 근원. launch 가 arm_base 인자를 override 하지 않음(grep 확인) → 재기동 시 그대로 반영.
+- 솔버 URDF(cyclo 전용, ptp 미사용)도 1.244 → 이제 xacro 와 정합. 명령 z +0.031 보정도 제거(모델이 맞으니 불필요).
+
+### 적용 / 검증 (라이브)
+- ptp colcon 재빌드 성공. **오프라인**: xacro 전개→pinocchio full 파싱 OK(nq=18, mimic/ros2_control 파싱에러 없음)→buildReducedModel 왼팔 nq=7, hand_tcp 프레임 O, neutral z=0.566(=옛 0.597−31mm).
+- **라이브**: 재기동 후 `/robot_description` base z=**1.2440** 확인. 좌팔 (0.10,0.10,0.72) 액션 이동 후 **실제 엔코더 FK z=0.7063 = 사용자 실측 일치** → 1.244 모델 정확 확정.
+
+### 별개 이슈 (모델 아님)
+- 목표 0.72 대비 실제 0.706 = **−14mm 관절 추종 처짐**(MIT 모드 적분無, 팔꿈치 joint4 지령 85.7°→실제 81.8°). 게인/중력보상 영역. [[motor-gain-tuning-plan]]
+- **토픽 단발 발행 유실**: 짧은 수명 노드가 `/<side>_joint_trajectory_controller/joint_trajectory` 토픽에 1회 발행 후 즉시 종료 → 컨트롤러 구독 매칭(discovery) 전이라 메시지 유실(팔 안 움직임). **FollowJointTrajectory 액션**(wait_for_server 핸드셰이크)으로 보내야 확실. 이 PC DDS 불안정 시 특히.
+
+### 재발 방지
+- 모델(기구학) 파라미터는 **xacro SSOT 한 곳**만 수정. 파생물(솔버 URDF, 명령 오프셋)에 band-aid 금지 → 분기→이상거동.
+- 모델 검증 = **엔코더 FK vs 실측**(모델 오차)와 **지령 관절 vs 실제 관절**(추종 처짐)을 분리. 둘을 섞으면 오진.
+- 실로봇 단발 모션은 토픽 발행 말고 액션 사용(discovery 유실 방지).
+
+---
+
+## 2026-06-07 04:59 (KST) — cyclo control: ① Stop 시 종료 안 됨 ② 요청 안 한 자동기동
+
+### 증상
+① Launch Manager 에서 cyclo MoveL 행 Stop 을 눌러도 cyclo 가 종료되지 않음("Running (external)" 유지). ② 사용자가 요청한 적 없는데 시작 시 cyclo control 이 자동 기동됨.
+
+### 원인
+- ① cyclo preset 의 stop 패턴이 `"openarmx_movel_bimanual"`(launch 파일명)뿐 → `ros2 launch` **부모 프로세스만** 매칭. 부모가 먼저 죽고 컨트롤러 노드(`omx_movel_controller_node …`, cmdline 에 그 문자열 없음)만 고아로 남으면 패턴이 아무것도 못 잡아 노드 생존. (좌/우 노드+부모는 같은 PGID 라 부모 살아있으면 그룹 kill 됐지만, 고아 시 누락.)
+- ② cyclo 자동기동 설정 2곳: (a) [scenario_player_with_ee_leader.launch.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_player/launch/scenario_player_with_ee_leader.launch.py) `start_movel_controllers` **default `true`** → `openarmx_movel_bimanual` 자동 포함. (b) [main_window.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py) `ScenarioMainWindow` 기본 `follower="cyclo"` → cyclo_extras(cyclo_sim+vr_controller) 자동기동(잠복 불일치; `scenario_ui.py` 는 `--follower` 기본 `moveit`).
+  - 참고: 정상 UI 경로(scenario_ui.launch.py→`--no-auto`, follower=moveit)는 cyclo 자동기동 안 함. `openarmx_scenario_workflow.launch.py` 도 cyclo 미포함.
+
+### 수정
+- ① [launch_manager_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/launch_manager_tab.py) cyclo preset 에 `"sweep": ["omx_movel_controller_node"]` 추가 → Stop 시 실제 노드 실행파일을 직접(그룹+PID) 종료, 고아 노드도 확실히 정리.
+- ②(a) `start_movel_controllers` default `true`→`false` (opt-in: `:=true` 또는 Launch Manager cyclo 행 Start).
+- ②(b) `ScenarioMainWindow` 기본 `follower` `"cyclo"`→`"moveit"` (cyclo_extras 는 `--follower cyclo` 명시 시만).
+
+### 검증
+- 3개 파일 py_compile OK. ①은 노드 실행파일명이 `omx_movel_controller_node`(좌/우 공통)임을 ps 캡처로 확인 — 패턴이 두 노드 직접 매칭. **라이브 재검증 대기**(cyclo 재기동 후 Stop → 노드 0 확인).
+- ②는 정상 경로가 이미 moveit 라 회귀 없음, 기본 자동기동만 제거.
+
+### 재발 방지
+- cyclo 종료 패턴은 launch 파일명이 아니라 **노드 실행파일명**(고아 대비)으로 둔다.
+- "Stop All (this tab)" 은 여전히 패턴 sweep 안 함 + L1 스포너(`--unload-on-kill`)까지 죽여 컨트롤러 통째 언로드 → 별도 결정 대기(A: Stop All 도 sweep / B: 스포너 제외).
+
+---
+
+## 2026-06-07 04:23 (KST) — UI 종료 시 팔이 토크 차단으로 낙하 → 종료 전 HOME 파크 추가
+
+### 증상
+scenario_ui 정상 종료(창 닫기 / Launch Manager "Stop All") 시 하드웨어·컨트롤러 노드가 즉시 죽으며 MIT(Mixed Impedance Torque) 모드 모터 토크가 끊겨 **팔이 중력으로 낙하**.
+
+### 원인
+[main_window.py:415](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py#L415) `closeEvent` 가 곧바로 `self._hw.stop()`, Launch Manager `_stop_all` 이 `proc.stop()` 으로 컨트롤러를 종료 → 토크 0 → 낙하. MIT 모드는 홀딩 브레이크 없음(홀딩도 토크 기반) → jog "풀림"([[2026-06-07 jog 풀림 항목]])과 동일 물리의 영구판.
+
+### 수정
+종료 직전 양팔을 HOME(전관절 0°)로 보내고 도착(±2°)/타임아웃까지 대기 후 하드웨어 종료.
+- bridge `park_arms_home(speed_deg_s=25, tol_deg=2, tick=QApplication.processEvents)` 추가 — 컨트롤러 active(traj 구독>0)일 때만, **그리퍼는 미터치**(쥔 물체 낙하 방지). 도착확인은 spin-thread 가 갱신하는 `latest_positions()` 폴링(Qt 블록 중에도 갱신되는 구조 확인).
+- 호출: `main_window.closeEvent` 최상단 + `launch_manager_tab._stop_all` 의 proc.stop 직전.
+- 파일: `scenario_action_client.py`(메서드+스냅샷), `main_window.py`, `launch_manager_tab.py` (PyQt5 `QApplication.processEvents` 로 GUI 응답 유지).
+
+### 검증
+- py_compile + offscreen import 스모크 **통과** (park_arms_home/latest_positions 존재, HOME=0 확인).
+- **라이브 동작 검증 대기**: UI 기동 후 HIL 상태에서 창닫기/Stop All → 팔이 HOME 이동 후 정지(낙하 없음) 확인 필요.
+
+### 한계 / 재발 방지
+- **그레이스풀 종료 한정.** kill_all_ros2.sh(즉시 SIGKILL)·크래시·전원차단·e-stop 엔 무력. 자세-무관 보호는 모터 홀딩 브레이크가 정석(현 HW 미탑재 추정).
+- HOME(0°)가 중력 안정 자세라는 전제(사용자 선택). 0°가 수평 뻗음이면 효과 제한 → 추후 전용 안정 park 자세 검토 여지.
+
+---
+
+## 2026-06-07 04:09 (KST) — jog(Joint Control 탭) 각도 변경 시 조인트가 "풀렸다 다시 움직임"
+
+### 증상
+Joint Control 탭에서 관절 각도를 바꾸면(새 jog 명령), 해당 조인트가 **목표 반대 방향으로 한 번 처졌다가(홀딩 토크 상실=풀림) 다시 목표로 가는** 2단 동작. leader-follower(teleop)에서는 안 나타남.
+
+### 원인 (2층위, rosbag 정량 확인)
+rosbag `experiments/rosbags/jog_20260607_034347` 의 `/{arm}_joint_trajectory_controller/controller_state` desired/actual + `/joint_states` velocity 로 확인.
+- **L1 — 직접 원인 (JTC(Joint Trajectory Controller) 설정):** JTC 에 `open_loop_control` 미설정 → 기본 `false`. 이 모드는 새 궤적을 **측정된(처진) actual 에서 시작**. 그래서 명령 수신 순간 출력 desired 가 직전 명령값에서 actual 로 **계단 하강** → 하드웨어 위치명령 하락 → 홀딩 토크≈0 → 조인트가 뒤로 처짐.
+  - 증거 (CMD #6, 좌 joint1, +0.7954→+1.0472 명령): 명령직전 desired **0.8727** / actual 0.7954 (정적 추종오차 +0.077 rad≈4.4°). t=0.016s 에 desired→**0.7956** 계단하강 → actual 이 **0.7471 까지 역방향 처짐(−0.048 rad≈2.8°)** 후 반전·구동. 우 joint1(CMD #5) 도 부호 반대 동일.
+- **L2 — 근본 원인 (하드웨어 게인):** JTC command_interface=`position` 단독, 실제 위치제어는 MIT(Mixed Impedance Torque) 모드 KP(비례게인)/KD(미분게인) 수행. **적분 없어** 정적 처짐 큼(홀딩 4.4°, +1.0472 위치 6.4°). 이 처짐 폭이 곧 L1 의 리셋 갭 → 처짐 클수록 풀림 큼. [[motor-gain-tuning-plan]] 와 동일 맥락.
+- **교차검증:** leader-follower(teleop)는 `forward_position_controller`(ForwardCommandController, JTC 아님)로 **200Hz 연속 위치 스트리밍** → "측정상태 리셋" 로직 없음 + 처짐 갭 미누적 → 풀림 없음. ([teleop_bimanual_node.cpp:138-149](../../openarmx_ws/src/openarmx_teleop_bimanual/src/teleop_bimanual_node.cpp#L138-L149))
+
+### 수정
+JTC 양팔에 **`open_loop_control: true`** 추가 → 새 궤적을 마지막 명령값에서 시작(처진 actual 리셋 안 함) → desired 계단하강·토크 붕괴 제거. ros2_controllers 표준 파라미터(2.53.1).
+- [openarmx_v10_bimanual_controllers.yaml](../../openarmx_ws/src/openarmx_ros2/openarmx_bringup/config/v10_controllers/openarmx_v10_bimanual_controllers.yaml) (활성 HIL config, 좌/우 2곳)
+- [openarmx_bimanual_moveit_config/config/ros2_controllers.yaml](../../openarmx_ws/src/openarmx_ros2/openarmx_bimanual_moveit_config/config/ros2_controllers.yaml) (MoveIt 경로 일관성, 좌/우 2곳)
+- symlink-install 이라 install 즉시 반영, 재빌드 불필요. YAML 파싱·4블록 True 확인 완료.
+
+### 검증
+- **YAML 유효성 + 파라미터 반영: 완료.**
+- **라이브 동작 검증: 완료 (2026-06-07 04:36).** 재기동 후 양팔 JTC(Joint Trajectory Controller) `open_loop_control=True` 확인. rosbag `jog_verify_20260607_043459` (32개 jog 명령, joint1 −1.175 rad 대이동 포함)에서 명령 직후 역방향 처짐 **최대 0.0004 rad (0.02°)** — 수정 전 −0.048 rad (2.8°) 대비 사실상 0(노이즈 수준). 이동 크기와 무관하게 단조 추종. **풀림 제거 확인.** `open_loop_control` 은 read-only 라 적용엔 컨트롤러 재로드(클린 re-bringup) 필요했음.
+
+### 재발 방지
+- position-command JTC + 적분 없는(MIT 모드) 하드웨어 조합에서는 **`open_loop_control: true` 가 기본**이어야 함(정적오차 리셋 갭이 풀림으로 보임). 신규 JTC config 추가 시 체크.
+- 근본적으로는 L2(정적 처짐) 축소 = 중력보상 피드포워드 또는 KP(비례게인)↑ ([[motor-gain-tuning-plan]]).
+
+---
+
+## 2026-06-06 23:09 (KST) — 팔 FK(Forward Kinematics) z 가 실제보다 상수 ~31mm 높음(엔코더 아래) + 관절 추종 처짐(게인 의존)
+
+### 증상
+ptp 로 왼팔을 명령 z 로 보내면 **실제 TCP(Tool Center Point) z 가 일정하게 낮음**. 명령 z=0.75 인데도 그리퍼가 바닥(실제 0.72)에 닿음.
+
+### 원인 (z 오차가 2종)
+1. **상수 ~31mm 바이어스 — FK(Forward Kinematics)(실측 관절각) vs 실제.** 5점 측정에서 FK(Forward Kinematics) z − 실측 z = +29~32mm (평균 +30.6, 편차 ±1.3), z 0.71~0.79 전 구간·자세 무관. 엔코더는 명령각에 와 있으므로 **관절각 오차가 아님** — 엔코더 아래 기구부 컴플라이언스(감속기/링크 휨) 또는 모델 캘리브(arm base z 1.275 의심). **게인과 무관.**
+2. **관절 추종 처짐 — 명령각 vs 실측각.** e_ss = τ_load/KP(비례게인) (MIT(Mixed Impedance Torque) 모드 적분 없음). 자세·부하 의존(joint4 가장 큼). **KP(비례게인)↑로 감소.**
+
+| 점 | FK(Forward Kinematics) z | 실제 z | 오프셋 |
+|---|---|---|---|
+| 1 | 0.741 | 0.710 | +31 |
+| 2 | 0.763 | 0.734 | +29 |
+| 3 | 0.786 | 0.754 | +32 |
+| 4 | 0.757 | 0.725 | +32 |
+| 5 | 0.743 | 0.714 | +29 |
+
+### 검증
+- 카메라-측정 바닥 0.724 ≈ 실제 바닥 0.72 → **카메라 체인은 ~4mm 로 정상**, 31mm 는 **팔 체인** 오차. 카메라 외부캘리브는 ChArUco 보드(body_link0 기준) 독립 수행([[d435_camera_extrinsic]])이라 팔 URDF(Unified Robot Description Format) 수정과 무관(별도 TF(Transform) 브랜치).
+
+### 수정 (방향)
+- **31mm**: 솔버 URDF(Unified Robot Description Format) 팔 base z `1.275 → 1.244`(−31mm) 정합 — 카메라 TF(Transform) 영향 없음, RViz/충돌/다른 백엔드까지 자동 정합. 임시로는 명령 z = 실제목표 + 0.031. (순수 z 평행인지 자세별 방향 변화인지 1~2자세 추가 확인 권장.)
+  - **✅ 적용·검증 완료(2026-06-06):** 좌·우 솔버 URDF(Unified Robot Description Format) 4곳 모두 `1.275→1.244` 수정(`openarmx_pick/urdf/openarmx_{left,right}_solver.urdf`, install→build→src 심링크라 즉시 반영). 검증: **보정값 없이** 명령 z=0.750 → **실제 측정 0.745**(예측 0.746 일치). 이제 명령 z = 실제 목표(수동 +31mm 불필요). 남은 ~5mm는 관절 추종 처짐(별개).
+  - **미적용:** full 로봇 URDF(Unified Robot Description Format)/xacro SSOT(Single Source of Truth)는 아직 base z=1.275 → TF(Transform)/RViz/readout 패널은 여전히 +31mm 높게 표시. ptp 기능은 정확하나 시각화·TF(Transform) 일관성 위해 xacro arm_base z도 −31mm 후 재생성 필요. **ptp 액션 노드는 재시작해야 새 모델 사용**(직접이동 스크립트는 즉시 반영).
+- **추종 처짐**: 중력보상 토크 피드포워드(Pinocchio `computeGeneralizedGravity` → τ_ff) 가 정석. 차선 KP(비례게인)↑.
+
+### 게인 조치 (이번 세션)
+- 런타임 `kp_joint1~4` **50→100→150→200**(양팔, 동적 param, 재빌드 불필요). 육안 떨림 없음@200. joint4 추종오차 좌팔 ~1.6→0.9°, 우팔 5.3→3.9°. **31mm 는 그대로**(게인 무관), 추종 처짐만 ~7→4mm 감소. 참고 [[motor-gain-tuning-plan]].
+
+---
+
 ## 2026-06-06 20:05 (KST) — HIL(Hardware In the Loop) RViz 로봇 망가짐: CAN(Controller Area Network) 미기동 → ros2_control_node SIGABRT → /joint_states 미발행 → TF(Transform) 깨짐
 
 ### 증상

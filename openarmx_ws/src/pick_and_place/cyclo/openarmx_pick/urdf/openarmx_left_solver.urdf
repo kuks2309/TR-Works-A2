@@ -13,8 +13,11 @@
     <visual name="openarmx_body_link0_visual">
       <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0" />
       <geometry>
-        <mesh filename="package://openarmx_description/meshes/body/v10/visual/body_link0.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://openarmx_description/meshes/body/v10/visual/body_link0_1350.stl" scale="0.001 0.001 0.001" />
       </geometry>
+      <material name="body_link0_default">
+        <color rgba="0.30 0.32 0.35 1.0" />
+      </material>
     </visual>
     <inertial>
       <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0" />
@@ -25,7 +28,7 @@
   <joint name="openarmx_left_openarmx_body_link0_joint" type="fixed">
     <parent link="openarmx_body_link0" />
     <child link="openarmx_left_link0" />
-    <origin rpy="-1.5708 0 0" xyz="0.0 0.031 0.735" />
+    <origin rpy="-1.5708 0 0" xyz="0.0 0.031 1.244" />
   </joint>
   <link name="openarmx_left_link0">
     <visual name="openarmx_left_link0_visual">
@@ -60,7 +63,7 @@
     <parent link="openarmx_left_link0" />
     <child link="openarmx_left_link1" />
     <axis xyz="0 0 1" />
-    <limit effort="120" lower="-3.344396" upper="0.9056039999999999" velocity="10.47" />
+    <limit effort="120" lower="-3.3161256000000003" upper="1.3962633999999998" velocity="10.47" />
   </joint>
   <link name="openarmx_left_link2">
     <visual name="openarmx_left_link2_visual">
@@ -81,7 +84,7 @@
     <parent link="openarmx_left_link1" />
     <child link="openarmx_left_link2" />
     <axis xyz="-1 0 0" />
-    <limit effort="120" lower="-3.2707963267948967" upper="0.1292036732051034" velocity="10.47" />
+    <limit effort="120" lower="-3.1415926267948966" upper="-2.6794896523796297e-08" velocity="10.47" />
   </joint>
   <link name="openarmx_left_link3">
     <visual name="openarmx_left_link3_visual">
@@ -102,7 +105,7 @@
     <parent link="openarmx_left_link2" />
     <child link="openarmx_left_link3" />
     <axis xyz="0 0 1" />
-    <limit effort="60" lower="-1.57" upper="1.57" velocity="10.47" />
+    <limit effort="60" lower="-1.5707963" upper="1.7453293" velocity="10.47" />
   </joint>
   <link name="openarmx_left_link4">
     <visual name="openarmx_left_link4_visual">
@@ -123,7 +126,7 @@
     <parent link="openarmx_left_link3" />
     <child link="openarmx_left_link4" />
     <axis xyz="0 1 0" />
-    <limit effort="60" lower="0.0" upper="1.8" velocity="10.47" />
+    <limit effort="60" lower="0.0" upper="1.9198622" velocity="10.47" />
   </joint>
   <link name="openarmx_left_link4_ext" />
   <joint name="openarmx_left_joint4_ext" type="fixed">
@@ -150,7 +153,7 @@
     <parent link="openarmx_left_link4" />
     <child link="openarmx_left_link5" />
     <axis xyz="0 0 1" />
-    <limit effort="14" lower="-1.5" upper="1.5" velocity="10.47" />
+    <limit effort="14" lower="-1.5707963" upper="1.5707963" velocity="10.47" />
   </joint>
   <link name="openarmx_left_link6">
     <visual name="openarmx_left_link6_visual">
@@ -171,7 +174,7 @@
     <parent link="openarmx_left_link5" />
     <child link="openarmx_left_link6" />
     <axis xyz="1 0 0" />
-    <limit effort="14" lower="-0.75" upper="0.75" velocity="10.47" />
+    <limit effort="14" lower="-0.6981317" upper="0.6981317" velocity="10.47" />
   </joint>
   <link name="openarmx_left_link7">
     <visual name="openarmx_left_link7_visual">
@@ -192,7 +195,7 @@
     <parent link="openarmx_left_link6" />
     <child link="openarmx_left_link7" />
     <axis xyz="0 -1 0" />
-    <limit effort="14" lower="-1.4" upper="1.4" velocity="10.47" />
+    <limit effort="14" lower="-1.3962634" upper="1.3962634" velocity="10.47" />
   </joint>
   <link name="openarmx_left_link7_pico" />
   <joint name="openarmx_left_link7_pico_joint" type="fixed">
@@ -204,7 +207,7 @@
   <joint name="openarmx_right_openarmx_body_link0_joint" type="fixed">
     <parent link="openarmx_body_link0" />
     <child link="openarmx_right_link0" />
-    <origin rpy="1.5708 0 0" xyz="0.0 -0.031 0.735" />
+    <origin rpy="1.5708 0 0" xyz="0.0 -0.031 1.244" />
   </joint>
   <link name="openarmx_right_link0">
     <visual name="openarmx_right_link0_visual">
@@ -492,4 +495,17 @@
     <child link="openarmx_right_left_finger" />
     <origin rpy="0 0 0" xyz="0 0.006 0.015" />
     </joint>
+  <joint name="d435_center_calib_joint" type="fixed">
+    <parent link="openarmx_body_link0" />
+    <child link="d435_center_link" />
+    <origin rpy="-0.008007570608149984 1.0436283528762693 -0.011088076737919976" xyz="0.062816 0.020383 1.183573" />
+  </joint>
+  <link name="d435_center_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 1.5707963267948966" xyz="0.0043 -0.0175 0" />
+      <geometry>
+        <mesh filename="package://realsense2_description/meshes/d435.dae" />
+      </geometry>
+    </visual>
+  </link>
 </robot>

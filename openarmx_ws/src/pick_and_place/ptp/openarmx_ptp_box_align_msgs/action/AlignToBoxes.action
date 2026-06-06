@@ -1,0 +1,26 @@
+# Detect boxes (in a separate perception node), assign each to the nearer arm by
+# base-frame Y (+Y -> left arm, -Y -> right arm), and move the assigned arm's
+# controlled frame (default hand_tcp, i.e. the tool center point / TCP) to
+# (box.x, box.y, z) with the given hand orientation (default vertical-down,
+# R180 P0 Y0), using a direct point-to-point (PTP) move: a single Pinocchio
+# damped-least-squares inverse kinematics solve -> one JointTrajectory point sent
+# to the arm's joint_trajectory_controller. This is NOT the MoveIt Pilz PTP
+# planner; it is a plain IK + single-endpoint JTC move (no QP/CBF, no MoveIt).
+# ---- Goal ----
+float64 z                 # TCP (hand_tcp) target height (absolute, openarmx_body_link0), metres
+float64 roll_deg  180.0   # hand orientation roll  (default: vertical-down)
+float64 pitch_deg 0.0     # hand orientation pitch
+float64 yaw_deg   0.0     # hand orientation yaw
+string  arms      both    # "both" | "left" | "right"
+float64 confidence 0.0    # ignored (detection is in box_perception_node)
+string  prompts    ""     # ignored (detection is in box_perception_node)
+---
+# ---- Result ----
+bool   success
+string message
+string detections_json    # boxes consumed, in base frame
+string assignments_json    # arm -> box, link7 target, IK residual, final position error
+---
+# ---- Feedback ----
+string  phase             # 'reading_boxes' | 'assigning' | 'solving' | 'moving' | 'opening_gripper' | 'done'
+float32 progress          # 0.0 .. 1.0

@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>openarmx_ptp_box_align</name>
+  <version>0.1.0</version>
+  <description>
+    Bimanual box-align via a direct point-to-point move: a single Pinocchio
+    damped-least-squares inverse kinematics solve for the link7 goal pose,
+    published as one JointTrajectory endpoint to the arm joint_trajectory_controller
+    (no QP/CBF, no MoveIt). Consumes /detected_boxes from a separate perception node.
+  </description>
+  <maintainer email="drko0808@gmail.com">openarmx</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>control_msgs</depend>
+  <depend>eigen</depend>
+  <depend>pinocchio</depend>
+  <depend>openarmx_ptp_box_align_msgs</depend>
+
+  <!-- The reduced single-arm solver URDFs are reused from openarmx_pick at runtime. -->
+  <exec_depend>openarmx_pick</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
