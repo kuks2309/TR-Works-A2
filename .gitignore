@@ -31,6 +31,19 @@ openarmx_ws/src/Sensor/RGBD/captures/
 
 # ---- AI training workspace (large weights / dataset / HEF / HAR; keep out of git) ----
 AI/
+# 예외: pick_and_place/AI 는 VLA(Vision-Language-Action) 소스(LeRobot 플러그인/스크립트) → 추적.
+# 단, 그 하위의 대용량 산출물(weights/dataset/outputs/HEF/HAR)은 계속 제외한다.
+!openarmx_ws/src/pick_and_place/AI/
+!openarmx_ws/src/pick_and_place/AI/**
+openarmx_ws/src/pick_and_place/AI/**/outputs/
+openarmx_ws/src/pick_and_place/AI/**/*.pth
+openarmx_ws/src/pick_and_place/AI/**/*.pt
+openarmx_ws/src/pick_and_place/AI/**/*.safetensors
+openarmx_ws/src/pick_and_place/AI/**/*.ckpt
+openarmx_ws/src/pick_and_place/AI/**/*.bin
+openarmx_ws/src/pick_and_place/AI/**/*.onnx
+openarmx_ws/src/pick_and_place/AI/**/*.hef
+openarmx_ws/src/pick_and_place/AI/**/*.har
 
 # ---- OS ----
 .DS_Store
