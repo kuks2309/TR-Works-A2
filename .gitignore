@@ -45,6 +45,10 @@ openarmx_ws/src/pick_and_place/AI/**/*.onnx
 openarmx_ws/src/pick_and_place/AI/**/*.hef
 openarmx_ws/src/pick_and_place/AI/**/*.har
 
+# ---- experiments rosbags (대용량 binary db3, 소스 아님) ----
+experiments/rosbags/
+**/*.db3
+
 # ---- OS ----
 .DS_Store
 Thumbs.db

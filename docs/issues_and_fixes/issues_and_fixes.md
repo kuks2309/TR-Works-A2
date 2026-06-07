@@ -7,6 +7,93 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-07 16:00 (KST) — JTC(Joint Trajectory Controller) 명령 시 "덜덜덜" 떨림 근본원인 진단 (진단만)
+
+### 증상
+JTC(Joint Trajectory Controller)로 명령 시 관절이 고주파로 "덜덜덜" 떤다. 정지(hold) 중에도 지속.
+
+### 원인
+rosbag 분석(상세: [2026-06-07_jtc_tremor_diagnosis.md](2026-06-07_jtc_tremor_diagnosis.md)) 결과 2층위.
+1. **(주원인) 모터단 MIT 임피던스 한계진동**: [v10_simple_hardware.cpp:572-591](../../openarmx_ws/src/openarmx_ros2/openarmx_hardware/src/v10_simple_hardware.cpp#L572-L591) `τ=KP·Δp+KD·(0−vel)+τ_ff`, KP/KD={50/2.5(j1-4),10/0.5(j5-7)}, 적분 없음. JTC 가 position-only → vel_cmd=0 이라 KD 가 **엔코더 양자화(0.022°) 속도노이즈를 증폭** → 토크 채터. hold 중 위치 p2p 0.022°인데 속도 ±6~13°/s·부호반전 ~38회/초.
+2. **(악화) 호스트 루프 저속·지터**: [read():479-483](../../openarmx_ws/src/openarmx_ros2/openarmx_hardware/src/v10_simple_hardware.cpp#L479-L483) 의 동기 CAN(Controller Area Network) `recv_all()` 로 루프가 100Hz→**55~68Hz**(헤더 stamp dt 로 확정, 기록누락 아님), 지터 최대 수백 ms.
+3. (별개) 무적분 정적 처짐 err_mean 2~5°. `open_loop_control:true` 는 "jog 풀림"만 막음.
+
+### 수정
+진단만 — 코드 변경 없음. 분석 스크립트 [analyze_jtc_jitter.py](../../experiments/analyze_jtc_jitter.py), [analyze_jointstates_tremor.py](../../experiments/analyze_jointstates_tremor.py) 추가. 해결 방향(게인 재튜닝/속도필터, 루프율 복구, velocity FF)은 사용자 지시 대기. [[motor_gain_tuning_plan]] [[motor_speed_limit_mit_mode]]
+
+### 재발 방지
+고주파 떨림은 controller_state(35Hz)로 못 본다 → `/joint_states` 속도/토크 + **헤더 stamp dt** 로 분석(저속 토픽 reversal=양자화 dither 혼동 주의).
+
+---
+
+## 2026-06-07 15:59 (KST) — ptp 전용 pick-and-place Qt UI 신규 패키지 `openarmx_ptp_ui` 생성 (표시·구동 분리) + `--symlink-install` 엔트리 실행비트 누락 수정
+
+### 동기
+ptp 묶음(`pick_and_place/ptp/`)에 모션 백엔드(C++ `openarmx_ptp_box_align`)와 액션 메시지만 있고 **전용 UI 부재**. ptp pick-and-place 구동에 하드웨어·컨트롤러·D435·원격검출/인지·정렬 백엔드·RViz 를 터미널에서 6개 수동 launch 후 `ros2 action send_goal` 직접 입력 필요. 직전 진단([2026-06-07 send_goal CLI 지연](2026-06-07_ui_detect_send_goal_cli_latency.md), [[ui_detect_cli_subprocess_bottleneck]])의 후속으로 **in-process 액션 클라이언트**를 채택한 전용 UI 를 신설.
+
+### 구현 (신규 패키지 `openarmx_ptp_ui`, ament_cmake, scenario_ui 미러)
+사용자 지시: UI 는 Qt(PyQt5), **표시와 구동의 분리** 준수, 가능한 코드는 C++(이미 `ptp_box_align_node`)·UI 는 Python, 계획참조 scenario. 사용자 결정 3건 = (1) Qt Designer `.ui`+분리 로직, (2) Launch 범위 전체 파이프라인, (3) AlignToBoxes 연동 in-process rclpy ActionClient.
+- **표시(Display)**: [ui/ptp_pnp_ui.ui](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/ui/ptp_pnp_ui.ui) — Qt Designer XML(launch 7행 + 골 파라미터 + Run/Cancel + 진행바 + 로그).
+- 표시 결선: [main_window.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/main_window.py) — `uic.loadUi` + 위젯↔구동 시그널 연결만.
+- **구동·프로세스**: [managed_process.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/managed_process.py) — scenario_ui 동일 파일 vendoring(시나리오 패키지 비결합, 백엔드 분리 정책과 동일).
+- **구동·ROS**: [ptp_ros_bridge.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/ptp_ros_bridge.py) — 백그라운드 스레드 rclpy `ActionClient`(`/openarmx/ptp_align_to_boxes`), `send_goal_async`/`cancel_goal_async`, feedback(phase/progress)·result→Qt 시그널.
+- 엔트리/launch/문서: [scripts/ptp_pnp_ui.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/scripts/ptp_pnp_ui.py), [launch/ptp_pnp_ui.launch.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/launch/ptp_pnp_ui.launch.py), [README.md](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/README.md).
+- launch 7행 명령은 scenario_ui `launch_manager_tab.py`/`pick_and_place_tab.py` 의 검증된 것 그대로. RViz config 는 src 직접 로드(realpath walk-up, 설치/share 금지 규칙). ptp 는 MoveIt-free 라 move_group 불필요.
+
+### 빌드/발견 gotcha (수정)
+`colcon build --symlink-install` + `install(PROGRAMS …)` 환경에서 colcon 이 설치본을 src 스크립트로 **심볼릭 링크**한다. 이때 src `scripts/ptp_pnp_ui.py` 에 **실행비트(+x)가 없으면** 링크가 비실행 파일을 가리켜 `ros2 pkg executables` 가 빈 결과 → `ros2 run`/`ros2 launch` 가 엔트리를 못 찾음(`install(PROGRAMS)` 의 0755 권한이 심링크로 무력화됨). 비교: scenario_ui `scenario_ui.py` 는 `-rwxrwxr-x`. → `chmod +x src/…/scripts/ptp_pnp_ui.py` 로 해결(재빌드 불필요, 심링크가 src 직참조).
+
+### 검증
+- `colcon build`(msgs+ui) PASS. py_compile OK. `.ui` 오프스크린 로드 — 23개 위젯 전부 존재.
+- 액션 Goal/Feedback/Result 필드 일치(`z/roll_deg/pitch_deg/yaw_deg/arms`, `phase/progress`, `success/message/detections_json/assignments_json`).
+- `_SCENARIO_RVIZ` 가 **src 경로**로 해석(설치본 아님). 윈도우 생성·상태갱신·서버없을때 graceful(run→False)·종료(closeEvent→bridge.shutdown) 정상.
+- **렌더 스크린샷 검증**(프로젝트 규칙): 레이아웃/색(초록 Start·빨강 Stop)/한글/진행바 60%/로그 정상, 외부 노드 감지(`● Running (external)`) 실동작 확인.
+- `chmod +x` 후 `ros2 pkg executables openarmx_ptp_ui` → `ptp_pnp_ui.py`, launch 가 `LaunchDescription` 생성.
+- **미실행**: 실로봇 스택 라이브 E2E(SIL→컨트롤러→ptp 백엔드 + `/detected_boxes` 발행 → Run/Cancel)는 외부 실행 노드 충돌 우려로 보류(사용자 파지 테스트 후 kill_all 클린 기동하여 진행 예정).
+
+### 재발 방지
+- `--symlink-install` 패키지의 `install(PROGRAMS)` 엔트리 스크립트는 **src 파일에 `chmod +x` 필수**(설치 권한이 심링크로 무효화됨). 신규 UI/노드 스크립트 추가 시 점검.
+- 반복 호출 액션은 UI 에서 in-process ActionClient 사용(CLI send_goal spawn 금지) — [[ui_detect_cli_subprocess_bottleneck]].
+
+---
+
+## 2026-06-07 07:23 (KST) — LeRobot leader teleoperator 플러그인 entry-point 미등록 → lerobot-record 실패 (1줄 수정)
+
+### 증상
+`AI/scripts/vla_collect_gui.sh collect` 로 VLA 수집 기동 시 `lerobot-record --teleop.type=openarmx_leader_ros2` 가 leader 텔레오퍼레이터 플러그인을 해석하지 못해 인스턴스화 실패 → 수집 자체가 불가. (E2E 미실행 상태에서 TR-AI-Pick 타당성 조사 중 사전 발견.)
+
+### 원인
+`AI/lerobot_teleoperator_openarmx_leader_ros2/pyproject.toml` 에 `[project.entry-points."lerobot.teleoperators"]` 섹션이 **없음**. LeRobot 외부 플러그인은 entry-point 그룹으로 검색되는데, follower 는 등록돼 있고([lerobot_robot_openarmx_follower_ros2/pyproject.toml:42-43](../../openarmx_ws/src/pick_and_place/AI/lerobot_robot_openarmx_follower_ros2/pyproject.toml#L42-L43), `lerobot.robots`) leader 만 누락. 클래스 자체는 [config_openarmx_ros2.py:58-60](../../openarmx_ws/src/pick_and_place/AI/lerobot_teleoperator_openarmx_leader_ros2/lerobot_teleoperator_openarmx_leader_ros2/config_openarmx_ros2.py#L58-L60) 에 `OpenArmXRos2TeleopConfig` + `@TeleoperatorConfig.register_subclass("openarmx_leader_ros2")` 로 존재 → 코드는 있으나 **패키징 노출(entry-point)만 빠진** 상태.
+
+### 수정
+[lerobot_teleoperator_openarmx_leader_ros2/pyproject.toml](../../openarmx_ws/src/pick_and_place/AI/lerobot_teleoperator_openarmx_leader_ros2/pyproject.toml) 끝에 follower 형식을 미러링해 2줄 추가:
+
+```toml
+[project.entry-points."lerobot.teleoperators"]
+openarmx_leader_ros2 = "lerobot_teleoperator_openarmx_leader_ros2.config_openarmx_ros2:OpenArmXRos2TeleopConfig"
+```
+
+### 추가 수정 — install_lerobot_plugins.sh 가 그대로는 설치 실패
+검증을 위해 `~/lerobot-venv`(`python3 -m venv --system-site-packages`, LeRobot 0.4.4, numpy 2.2.6)에 설치를 시도하니 스크립트가 두 가지로 실패:
+1. **행(hang)**: 플러그인 `dependencies = ["lerobot","rclpy"]` 중 `rclpy` 는 PyPI 에 없음(시스템 ROS2 제공) → 평범한 `pip install -e` 가 PyPI 에서 rclpy 를 풀려다 의존성 백트래킹에 갇힘(hf-transfer 경고 수십 회 반복).
+2. **leader = "UNKNOWN-0.0.0"**: 빌드 격리 환경의 setuptools 가 leader `pyproject.toml` 의 `[project]` 를 못 읽어 이름 없는 패키지로 빌드 → entry-point 미등록. (leader 는 follower 와 달리 `setup.py` 없음.)
+
+→ [scripts/install_lerobot_plugins.sh](../../openarmx_ws/src/pick_and_place/AI/scripts/install_lerobot_plugins.sh) 를 검증된 incantation 으로 수정:
+`pip install -q -U "setuptools>=64" wheel setuptools_scm` 선행 후 `pip install --no-deps --no-build-isolation -e <plugin>`.
+(`--no-deps`: rclpy/lerobot 이미 충족 → 백트래킹 회피. `--no-build-isolation`: env 의 setuptools 80 사용 → `[project]`/entry-points 정상 인식 + PEP 660 editable, UNKNOWN 회피.)
+
+### 검증
+- 정적: TOML 파싱 OK / 그룹 `lerobot.teleoperators` · 키 `openarmx_leader_ros2` · 타겟 경로 정합 / AST 로 `OpenArmXRos2TeleopConfig` 실재 + `register_subclass` 키 일치 / 동작 중인 follower 와 형식 대칭 확인.
+- **런타임 PASS ✅**: 고친 스크립트 실행 결과 양 플러그인 editable 설치 + 검증기 출력 `lerobot.robots : ['openarmx_follower_ros2']` / `lerobot.teleoperators : ['openarmx_leader_ros2']`. → `--teleop.type=openarmx_leader_ros2` 해석 가능. (수정 전엔 teleoperators 빈 리스트.)
+
+### 재발 방지
+- LeRobot 플러그인 이식/추가 시 `@*.register_subclass(...)` 데코레이터와 `pyproject.toml` 의 `[project.entry-points."lerobot.<robots|teleoperators>"]` 등록을 **반드시 쌍으로** 확인.
+- LeRobot 플러그인(rclpy 의존 + 로컬 경로) 은 항상 `pip install --no-deps --no-build-isolation -e` 로 설치. 평범한 `pip install -e` 는 rclpy PyPI 백트래킹으로 멈춘다.
+- 설치 직후 `install_lerobot_plugins.sh` 의 entry-point 검증 출력에 robots/teleoperators 키가 모두 나오는지 점검.
+- LeRobot venv 는 numpy 2.x 필수(cv_bridge 만 segfault, 플러그인은 회피) — [[lerobot_venv_numpy2_strategy]] 참조.
+
+---
+
 ## 2026-06-07 (KST) — pick_and_place UI 검출/pick 지연: ros2 action send_goal CLI subprocess 콜드스타트 (진단만, 수정 보류)
 
 ### 증상
@@ -297,7 +384,15 @@ numpy 1.x/2.x ABI(Application Binary Interface) 충돌. apt `ros-humble-pinocchi
 
 ### 수정
 - **원인 A (완료, subprocess 를 GUI 스레드에서 제거)**: `_query_nodes` → 브리지 인프로세스 `live_node_names()`(rclpy 그래프 API). `_proc_running`/`_proc_running_external` → `/proc` 1회 스캔(`_running_cmdlines`, ~10ms) 재사용·부분문자열 매칭(`pgrep -f re.escape` 동치). [main_window.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/main_window.py) 에서 `LaunchManagerTab(self._bridge,…)` 주입. 잔여 `subprocess.run` 은 Stop/kill 일회성(타이머 아님). symlink-install — **UI 재기동 시 적용**.
-- **원인 B (제안, 미적용)**: diagnostics 구독을 lazy 화(Pipe Health 탭 활성 시에만 구독/해제), /joint_states 중복 구독 제거(피드백 sub 의 레이트 재사용), /dynamic_joint_states 역직렬화 회피. → 사용자 승인 후 진행.
+- **원인 B (완료, executor 부하 축소)**: [scenario_action_client.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/scenario_action_client.py) + [diagnostics_tab.py](../../openarmx_ws/src/openarmx_ros2/openarmx_scenario_ui/openarmx_scenario_ui/diagnostics_tab.py).
+  - **diagnostics 구독 lazy 화**: `_setup_diagnostics` 가 더 이상 시작 시 14개 토픽을 구독하지 않음. `diag_start`/`diag_stop`(GUI 스레드는 의도 플래그만, 실제 create/destroy 는 spin 스레드 `_apply_diag_pending` 에서 — rclpy 엔티티를 spin_once 와 동시 변경 금지). Pipe Health 탭 `showEvent`/`hideEvent` 에서만 구독·해제 + 새로고침 타이머 start/stop(숨김 탭은 폴링도 안 함).
+  - **/joint_states 중복 구독 제거**: diagnostics 가 /joint_states 를 두 번째로 구독하던 것 제거 → 기존 100Hz 피드백 콜백 `_on_joint_state` 에서 카운터만 증가(`_DIAG_PIGGYBACK`). 100Hz×2 역직렬화 → ×1.
+  - 효과(예상): Pipe Health 안 볼 때 /dynamic_joint_states(무거운 InterfaceValue 디코드)·/tf(중복)·ee_pose×2 역직렬화 소멸 → executor ~87% CPU·GIL 경합 대폭 완화. **라이브 CPU 검증은 UI 재기동 후**(미실시).
+
+### 적용 상태 / 재기동 토폴로지 (중요)
+- 모든 수정은 **`scenario_ui` 프로세스 안에만** 존재(launch_manager_tab/pick_and_place_tab/diagnostics_tab/scenario_action_client/main_window). 다른 노드는 이 모듈 미사용 → **UI 프로세스만 재기동하면 100% 적용**, 제어 스택 무영향. (5개 파일 py_compile OK, symlink-install — 빌드 불필요.)
+- **현 라이브 세션은 수동 조립 6개 launch**: ① UI(a2-scenario) ② RViz+EE(End Effector) 리더마커(`openarmx_scenario_workflow.launch.py`) ③ fake-HW+controller_manager+RSP(`openarmx_hardware.launch.py use_fake_hardware:=true`) ④ move_group(`move_group.launch.py`) ⑤ 컨트롤러 스폰(JSB·JTC×2·그리퍼×2) ⑥ cyclo MoveL×2(`omx_movel_controller_node`). **복합 bring-up 스크립트 없음**(`openarmx_ws/scripts/` 에 `kill_all_ros2.sh` 뿐) → `kill_all` 전체종료 시 ③~⑥ 수동 재조립 필요(순서 의존, 리스크).
+- **재기동 미실시(사용자가 "기록 후 종료")**. 다음 세션에서 적용: UI-only 재기동 권장(제어스택 유지) 또는 규칙대로 kill_all 후 6종 순서 재기동.
 
 ### 재발 방지
 - PyQt GUI 스레드(슬롯/QTimer 콜백)에서 블로킹 `subprocess.run` 금지(`ros2 node list`·`pgrep` 0.5~수초). ROS 그래프=인프로세스 rclpy API, 프로세스 조회=`/proc` 스캔, 불가피하면 백그라운드 QThread+시그널.

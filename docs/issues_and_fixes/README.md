@@ -47,3 +47,4 @@ China 모노레포 (openarmx_ws / cyclo_control / calibration / 3d_detect_ws 등
 - [2026-06-07 pick_and_place UI 검출/pick 지연: ros2 action send_goal CLI subprocess 콜드스타트 (~850ms vs in-process 44ms, 진단만)](2026-06-07_ui_detect_send_goal_cli_latency.md)
 - [2026-06-07 openarmx_vla → pick_and_place/AI 백엔드 이식 (단일캠+leader-follower) + .gitignore 'AI/' 충돌 해결](2026-06-07_vla_ai_backend_port.md)
 - [2026-06-07 중력 보상 HIL 위치정확도 검증 (OFF 43→ON 9mm, 79%↓) + g_scale 최적화(채택 0.95) + effort 컨트롤러 언로드 결함](2026-06-07_gravity_comp_hil_accuracy.md)
+- [2026-06-07 JTC "덜덜덜" 떨림 진단: 모터 MIT PD 한계진동(KD×양자화 속도노이즈) + 루프 저속/지터(100→55~68Hz), 진단만](2026-06-07_jtc_tremor_diagnosis.md)
