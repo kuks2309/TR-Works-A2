@@ -1,0 +1,13 @@
+# 왼팔 pick 시퀀스 설정 — ptp_pick_seq_v2_left.py (SIDE=left) 가 실행 시 로드.
+# 코드 수정 없이 이 파일만 고쳐 튜닝한다.
+
+# 파지 위치 보정 오프셋 [m]. 검출 박스 위치(openarmx_body_link0)에 더해짐.
+# 실측: 계산값보다 +X(전방)로 1.5cm 더 가야 파지 양호.
+grasp_offset:
+  x: 0.015
+  y: 0.0
+  z: 0.0
+
+# 접근/상승 높이(approach_z) 와 하강(파지) 높이(descend_z). 테이블 충돌 방지로 approach 높게.
+approach_z: 0.87
+descend_z: 0.75
