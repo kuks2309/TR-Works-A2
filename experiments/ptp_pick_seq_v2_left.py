@@ -41,9 +41,13 @@ ARM_PREFIX = f"openarmx_{SIDE}_joint"
 TCP_FRAME = f"openarmx_{SIDE}_hand_tcp"
 JTC = f"{SIDE}_joint_trajectory_controller"
 FPOS = f"{SIDE}_arm_position_controller"
-# INIT 자세 (deg): 좌 j1=+50/j7=+50, 우 j1=-50/j7=-50, 공통 j4=100
-INIT_DEG = ([50.0, 0.0, 0.0, 100.0, 0.0, 0.0, 50.0] if SIDE == "left"
-            else [-50.0, 0.0, 0.0, 100.0, 0.0, 0.0, -50.0])
+# INIT 자세 (deg): 2026-06-07 오른팔 핸드 가이드 자세를 등록(테이블 충돌 회피용 상향).
+# 좌우 미러 규칙(실증, FK perr=0mm): j4(팔꿈치)만 동일, 나머지(j1·j2·j3·j5·j6·j7) 전부 부호반전.
+#   s = (-1,-1,-1,+1,-1,-1,-1).  옛 INIT([-50,0,0,100,0,0,-50]↔[50,0,0,100,0,0,50])과도 일치.
+#   우(등록): [-42.8,  46.3, -14.3, 106.5,  41.7, -23.4, -42.1]
+#   좌(미러): [ 42.8, -46.3,  14.3, 106.5, -41.7,  23.4,  42.1]
+INIT_DEG = ([42.8, -46.3, 14.3, 106.5, -41.7, 23.4, 42.1] if SIDE == "left"
+            else [-42.8, 46.3, -14.3, 106.5, 41.7, -23.4, -42.1])
 
 APPROACH_Z = 0.80
 DESCEND_Z = 0.75
@@ -63,6 +67,20 @@ WARMUP_T = 0.1           # JTC 스위치 후 워밍업 궤적 시간 [s]
 # 중간자세(테이블 충돌 방지): INIT 자세 유지한 채 X +7cm 앞으로, z>=0.75 로 이동
 MID_X_FWD = 0.07         # INIT TCP 에서 X 앞으로 [m]
 MID_MIN_Z = 0.75         # 중간자세 최소 높이 [m]
+
+# 파지 자세 pitch 상한 [deg]. 비스듬은 유리하나 이 이상 앞으로 숙이면 파지 실패 ->
+# |pitch|<=PITCH_MAX 해를 우선 채택(자연 슬랜티드 유지), 과도하면 다른 IK 해 탐색.
+# 2026-06-07: 사용자가 핸드 가이드로 시연한 far-right graspable 자세가 tilt~50°(P-49.6) ->
+# 45° 캡이 그 좋은 각도를 걸러내 far-right 실패 -> 55° 로 상향(시연 50°+여유 5°).
+# 기준 자세: experiments/right_grasp_reference_pose.yaml
+PITCH_MAX = 55.0
+
+# 접근 IK 후보: 유효(pitch<=PITCH_MAX, |yaw|<=YAW_MAX) 후보를 N_CAND 개 모을 때까지 랜덤
+# 리스타트를 MAX_TRIES 까지 시도(조기종료) -> 그 중 접근 이동량 최소(최적경로) 선택.
+# 유효 0개면 뒤틀린 자세를 채택하지 않고 상위에서 안전 중단(빈손/손목뒤틀림 방지).
+N_CAND = 3
+MAX_TRIES = 24
+YAW_MAX = 25.0
 
 # 수직 하향 자세 R180 P0 Y0 = Rx(pi) = diag(1,-1,-1)
 R_DOWN = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])
@@ -179,22 +197,35 @@ class PickV2(Node):
             self._clamp(q)
         return q, float(np.linalg.norm(err)), False
 
-    def solve_pos(self, x, y, z, seed):
-        """position-only IK (자세 자유). 시드에서 자연 수렴하는 해 — 비스듬 파지가 잡기 편함."""
+    def solve_pos(self, x, y, z, seed, pitch_max=PITCH_MAX):
+        """position-only IK (자세 자유, 비스듬 파지 유리). 단 pitch(앞으로 숙임)가 과도하면
+        파지 실패하므로 |pitch|<=pitch_max 해를 우선 채택(없으면 |pitch| 최소). 자연 슬랜티드 유지."""
         p = np.array([x, y, z])
-        best_q, best_res = seed.copy(), 1e18
+        best = None                          # (abs_pitch, q, res, err, tcp)
+        fb_q, fb_res = seed.copy(), 1e18      # 미도달시 최저잔차 폴백
         for attempt in range(IK_RESTARTS + 1):
             qa = seed.copy() if attempt == 0 else pin.randomConfiguration(self.model)
-            q, res, conv = self._ik_pos_descent(p, qa)
-            if res < best_res:
-                best_res, best_q = res, q
-            if conv:
-                best_q, best_res = q, res
-                break
-        pin.forwardKinematics(self.model, self.data, best_q)
+            q, res, _ = self._ik_pos_descent(p, qa)
+            pin.forwardKinematics(self.model, self.data, q)
+            pin.updateFramePlacement(self.model, self.data, self.fid)
+            M = self.data.oMf[self.fid]
+            tcp = M.translation.copy()
+            err = float(np.linalg.norm(tcp - p) * 1000.0)
+            if res < fb_res:
+                fb_res, fb_q = res, q.copy()
+            if err <= 5.0:
+                apitch = abs(math.degrees(pin.rpy.matrixToRpy(M.rotation)[1]))
+                if best is None or apitch < best[0]:
+                    best = (apitch, q.copy(), res, err, tcp)
+                if apitch <= pitch_max:       # 적당한 pitch면 채택 (자연 슬랜티드)
+                    break
+        if best is not None:
+            _, q, res, err, tcp = best
+            return q, res, err, tcp
+        pin.forwardKinematics(self.model, self.data, fb_q)
         pin.updateFramePlacement(self.model, self.data, self.fid)
         tcp = self.data.oMf[self.fid].translation.copy()
-        return best_q, best_res, float(np.linalg.norm(tcp - p) * 1000.0), tcp
+        return fb_q, fb_res, float(np.linalg.norm(tcp - p) * 1000.0), tcp
 
     # -------- 6D IK (수직하향 자세 구속; 책상 걸림 방지)
     def _ik6_descent(self, oMdes, q):
@@ -263,6 +294,72 @@ class PickV2(Node):
         pin.updateFramePlacement(self.model, self.data, self.fid)
         M = self.data.oMf[self.fid]
         return M.translation.copy(), np.degrees(pin.rpy.matrixToRpy(M.rotation))
+
+    def solve_pick_optimal(self, bx, by, seed, n=N_CAND):
+        """박스로 가는 접근 IK(Inverse Kinematics)만 후보 탐색. 시드 1 + 랜덤 리스타트를
+        MAX_TRIES 까지 시도하며 파지 유효(|pitch|<=PITCH_MAX, |yaw|<=YAW_MAX, err<=5mm) 접근
+        후보를 모은다(유효 n개 모이면 조기종료). 유효 후보 중 접근 이동량(현재 관절 대비 최대
+        관절 변화) 최소를 선택. 하강은 선택 접근에서 1회만 풀이(수직 하강은 단일해로 충분).
+        유효 0개면 뒤틀린 자세를 채택하지 않고 ok=False 로 상위가 안전 중단(빈손/손목뒤틀림 방지).
+        파지 유효성은 접근 자세 RPY 로 판정(하강은 접근에서 시드 -> 자세 거의 동일).
+        반환 (qa, ea, ta, qd, ed, td, info, ok)."""
+        cur = self.arm_q()
+        valids = []   # (motion, pitch, yaw, qa, ea, ta)
+        tries = 0
+        for i in range(MAX_TRIES):
+            tries += 1
+            sd = seed if i == 0 else pin.randomConfiguration(self.model)
+            qa, _, ea, ta = self.solve_pos(bx, by, APPROACH_Z, sd)
+            _, arpy = self.grasp_pose_rpy(qa)
+            pitch, yaw = abs(float(arpy[1])), abs(float(arpy[2]))
+            if ea <= 5.0 and pitch <= PITCH_MAX and yaw <= YAW_MAX:
+                motion = float(np.degrees(np.max(np.abs(self.target_arm(qa) - cur))))
+                valids.append((motion, pitch, yaw, qa, ea, ta))
+                if len(valids) >= n:
+                    break
+        if not valids:
+            info = (f"유효 0개/{tries}회 — |yaw|<={YAW_MAX:.0f} & |pitch|<={PITCH_MAX:.0f} "
+                    f"접근 없음(뒤틀림뿐). 안전 중단 요망")
+            return None, 99.0, None, None, 99.0, None, info, False
+        valids.sort(key=lambda c: c[0])                # 접근 이동량 최소(최적경로)
+        motion, pitch, yaw, qa, ea, ta = valids[0]
+        qd, _, ed, td = self.solve_pos(bx, by, DESCEND_Z, qa)   # 하강은 선택 접근에서 1회만(자유 IK)
+        info = (f"접근 유효 {len(valids)}개/{tries}회 선택 "
+                f"이동 {motion:.0f}deg / pitch {pitch:.0f}deg / yaw {yaw:.0f}deg (하강 1회)")
+        return qa, ea, ta, qd, ed, td, info, True
+
+    def _ref_model(self):
+        """grasp 기준자세 모델(오른팔 데이터 기반) 1회 로드·캐시. 없으면 None."""
+        if getattr(self, "_refm", "x") != "x":
+            return self._refm
+        import yaml
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "right_grasp_reference_model.yaml")
+        self._refm = yaml.safe_load(open(path)) if os.path.exists(path) else None
+        return self._refm
+
+    def solve_pick_refmodel(self, bx, by, seed):
+        """grasp 기준자세 모델: 박스 (X,|Y|) -> 목표 tilt(평면회귀) -> 목표 자세 R.
+        접근·하강 모두 그 R 로 6D IK(자세 구속) -> 접근 자세=하강 자세=기준자세
+        (자유 IK 의 수직화/뒤틀림 없음). 모델은 오른팔 기반 -> 왼팔은 yaw 부호반전(미러).
+        반환 (qa, ea, ta, qd, ed, td, info, ok)."""
+        m = self._ref_model()
+        if not m:
+            return (None, 99.0, None, None, 99.0, None,
+                    "기준자세 모델 없음(build_grasp_reference_model.py 먼저)", False)
+        tp = m["tilt_plane"]
+        tilt = tp["a_X"] * bx + tp["b_absY"] * abs(by) + tp["c"]
+        lo, hi = m.get("tilt_clamp_deg", [10.0, 60.0])
+        tilt = max(lo, min(hi, float(tilt)))
+        roll0 = float(m.get("roll_deg", 180.0))
+        yaw0 = float(m.get("yaw_deg", 0.0)) * (-1.0 if SIDE == "left" else 1.0)
+        R = pin.rpy.rpyToMatrix(math.radians(roll0), math.radians(-tilt), math.radians(yaw0))
+        qa, _, ea, ta = self.solve_pose(bx, by, APPROACH_Z, R, seed)
+        qd, _, ed, td = self.solve_pose(bx, by, DESCEND_Z, R, qa)
+        ok = (ea <= 5.0 and ed <= 5.0)
+        info = (f"기준자세 tilt={tilt:.1f}° (roll{roll0:.0f}/yaw{yaw0:+.1f}) "
+                f"접근err={ea:.1f}mm 하강err={ed:.1f}mm")
+        return qa, ea, ta, qd, ed, td, info, ok
 
     def gripper_tilt_deg(self, q):
         """그리퍼 접근축(hand_tcp z)이 수직하향(-Z)에서 벗어난 각도 [deg]. 수직=0."""
@@ -352,7 +449,7 @@ class PickV2(Node):
         """핑거 위치로 파지 성공 판정. 박스 물리면 명령(0.0088)보다 높은 폭에서 stall."""
         for _ in range(15):
             rclpy.spin_once(self, timeout_sec=0.05)
-        g = self.state.get("openarmx_left_finger_joint1", 0.0)
+        g = self.state.get(f"openarmx_{SIDE}_finger_joint1", 0.0)
         gripped = g > 0.0095
         print(f"   [{label}] finger={g:.4f}m (cmd 0.0088) -> "
               f"{'파지 OK(박스 물림)' if gripped else '미파지 의심(빈 손)'}")
@@ -456,9 +553,26 @@ def main():
         ik_times.append(_time.monotonic() - t0)
         return q, r, e, t, "free"
 
-    qa, ra, ea, ta, ma = solve(APPROACH_Z, seed)
-    qd, rd, ed, td, md = solve(DESCEND_Z, qa)
-    qr, rr, er, tr, mr = solve(APPROACH_Z, qd)
+    t_ik = _time.monotonic()
+    grasp_ok = True
+    if vdown_pref:
+        qa, ra, ea, ta, ma = solve(APPROACH_Z, seed)
+        qd, rd, ed, td, md = solve(DESCEND_Z, qa)
+        opt_info = "vdown(후보선택 미적용)"
+    elif "--optimal" in sys.argv:
+        # (구방식 폴백) 접근만 후보 탐색 -> 파지 유효 중 이동량 최소
+        qa, ea, ta, qd, ed, td, opt_info, grasp_ok = node.solve_pick_optimal(bx, by, seed, N_CAND)
+        ma = md = "free"
+    else:
+        # 기본: grasp 기준자세 모델(박스 위치 -> 목표 자세). 접근=하강=기준자세.
+        qa, ea, ta, qd, ed, td, opt_info, grasp_ok = node.solve_pick_refmodel(bx, by, seed)
+        ma = md = "refmodel"
+    if not grasp_ok:
+        print(f"   [IK 자세결정] {opt_info}")
+        print("!! SAFE-ABORT: 유효 파지자세 없음/모델 없음/도달불가 — 실행 안 함. 박스 위치·모델 확인.")
+        node.destroy_node(); rclpy.shutdown(); return 1
+    qr, rr, er, tr, mr = qa, 0.0, ea, ta, ma   # 상승=접근 자세 복귀(재풀이 불필요)
+    ik_ms = (_time.monotonic() - t_ik) * 1000.0
     # 중간자세(테이블 충돌 방지): INIT 자세 유지 + X+7cm + z>=0.75
     it_pos, it_R = node.init_tcp_pose()
     mx, my, mz = it_pos[0] + MID_X_FWD, it_pos[1], max(float(it_pos[2]), MID_MIN_Z)
@@ -467,8 +581,8 @@ def main():
     print(f"[2a] 중간자세 (INIT XY {it_pos[0]:.3f},{it_pos[1]:.3f} -> X+{MID_X_FWD} z>={MID_MIN_Z}) "
           f"타깃 ({mx:.3f}, {my:.3f}, {mz:.3f}) 자세유지 err={e_mid:.2f}mm")
     print(f"   [IK 자세모드] 접근={ma} 하강={md} 상승={mr}")
-    print(f"   [IK 계산시간] 접근/하강/상승 = "
-          f"{', '.join(f'{x*1000:.0f}ms' for x in ik_times)}  합 {sum(ik_times)*1000:.0f}ms")
+    print(f"   [IK 자세결정] {opt_info}")
+    print(f"   [IK 계산시간] 합 {ik_ms:.0f}ms")
     tilt = node.gripper_tilt_deg(qd)
     print(f"   [그리퍼 기울기] 하강자세 tilt={tilt:.1f}° (수직=0°; 적당히 비스듬이 파지에 유리)")
     gp, grpy = node.grasp_pose_rpy(qd)
