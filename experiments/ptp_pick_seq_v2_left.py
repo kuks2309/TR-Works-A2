@@ -49,6 +49,22 @@ FPOS = f"{SIDE}_arm_position_controller"
 INIT_DEG = ([42.8, -46.3, 14.3, 106.5, -41.7, 23.4, 42.1] if SIDE == "left"
             else [-42.8, 46.3, -14.3, 106.5, 41.7, -23.4, -42.1])
 
+# 박스 접근(진입) 지점 (deg): 2026-06-07 핸드 가이드로 캡처한 entry 자세
+# (right_grasp_reference_dataset.yaml, pose_type=entry). 파지 성공 시 이 지점으로 가서 오픈(놓기).
+# 좌우 미러: j4 만 동일, 나머지 부호반전 (s=-1,-1,-1,+1,-1,-1,-1).
+#   우(기록): [ 2.27,  17.79, -36.32, 110.37,  8.36, -41.27, -14.14]
+#   좌(미러): [-2.27, -17.79,  36.32, 110.37, -8.36,  41.27,  14.14]
+APPROACH_POINT_DEG = ([-2.27, -17.79, 36.32, 110.37, -8.36, 41.27, 14.14] if SIDE == "left"
+                      else [2.27, 17.79, -36.32, 110.37, 8.36, -41.27, -14.14])
+
+# 박스 드랍(놓기) 위치 (deg): 2026-06-07 핸드 가이드로 캡처한 drop 자세
+# (right_grasp_reference_dataset.yaml, pose_type=drop). 박스 접근 지점 경유 후 여기서 오픈(드롭).
+# 좌우 미러: j4 만 동일, 나머지 부호반전.
+#   우(기록): [ 43.05, -1.29, -34.39, 54.43,  23.62, -22.91, -1.40]
+#   좌(미러): [-43.05,  1.29,  34.39, 54.43, -23.62,  22.91,  1.40]
+DROP_POINT_DEG = ([-43.05, 1.29, 34.39, 54.43, -23.62, 22.91, 1.40] if SIDE == "left"
+                  else [43.05, -1.29, -34.39, 54.43, 23.62, -22.91, -1.40])
+
 APPROACH_Z = 0.80
 DESCEND_Z = 0.75
 GRIP_80 = 0.0088
@@ -467,6 +483,16 @@ class PickV2(Node):
         self._jtc_send(init, t, "INIT")
         self.wait(t + SETTLE)
 
+    def goto_joint(self, deg, label, t=None):
+        """임의 관절각(deg)으로 JTC 이동(스위치 직후 워밍업 궤적 후 목표 발행)."""
+        if t is None:
+            t = INIT_TIME
+        tgt = np.array([math.radians(d) for d in deg])
+        self._jtc_send(self.arm_q(), WARMUP_T, "warmup")
+        self.wait(0.25)
+        self._jtc_send(tgt, t, label)
+        self.wait(t + SETTLE)
+
     def gripper(self, position, label, block=True, settle_after=None):
         if settle_after is None:
             settle_after = SETTLE
@@ -666,22 +692,31 @@ def main():
     print("[6] 상승 (JTC->forward)")
     lap("6a_switch_fpos", lambda: node.do_switch([FPOS], [JTC]))
     lap("6b_retreat_ramp", lambda: node.forward_ramp(retr, "상승"))
-    node.grip_status("파지검증")
+    gripped = node.grip_status("파지검증")
 
     print("[end] JTC 복귀")
     lap("end_switch_jtc", lambda: node.do_switch([JTC], [FPOS]))
 
-    print("[7] 3초 대기(고정) -> 펴고 -> INIT")
-    lap("7_dwell_fixed", lambda: node.wait(3.0))
-    lap("8_release", lambda: node.gripper(GRIP_OPEN, "release", block=False, settle_after=0.3))
-    lap("9_goto_init", lambda: node.goto_init())
+    if gripped:
+        # 파지 성공 -> 접근 지점 -> 드랍 위치 -> 드롭 -> (복귀: 접근 지점 경유) -> INIT
+        print("[7] 파지 성공 -> 접근 지점 -> 드랍 위치 -> 드롭 -> 접근 지점 경유 -> INIT")
+        lap("7a_to_approach_pt", lambda: node.goto_joint(APPROACH_POINT_DEG, "박스접근지점"))
+        lap("7b_to_drop_pt", lambda: node.goto_joint(DROP_POINT_DEG, "박스드랍위치"))
+        lap("8_drop", lambda: node.gripper(GRIP_OPEN, "release(drop)", block=False, settle_after=0.3))
+        lap("8b_back_approach_pt", lambda: node.goto_joint(APPROACH_POINT_DEG, "박스접근지점(복귀)"))
+        lap("9_goto_init", lambda: node.goto_init())
+    else:
+        # 파지 실패(빈 손) -> 놓기 생략, 곧장 홈 복귀
+        print("[7] 파지 실패(빈 손) -> 놓기 생략, 홈 복귀")
+        lap("9_goto_init", lambda: node.goto_init())
 
     total = _time.monotonic() - t_all
     print("\n=== 단계별 타이밍 분석 ===")
     for label, dt in laps:
         print(f"  {label:18s}: {dt:6.2f}s  ({dt / total * 100:4.1f}%)")
-    print(f"  {'TOTAL':18s}: {total:6.2f}s   (3s dwell 제외 실동작 {total - 3.0:.2f}s)")
-    print("=== 시퀀스 완료 (release + INIT 원위치) ===")
+    print(f"  {'TOTAL':18s}: {total:6.2f}s")
+    print("=== 시퀀스 완료 ("
+          + ("파지 성공: 접근->드랍 드롭->접근 경유->INIT" if gripped else "파지 실패: 홈 복귀(놓기 생략)") + ") ===")
     node.destroy_node(); rclpy.shutdown(); return 0
 
 
