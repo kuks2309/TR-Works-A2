@@ -691,15 +691,19 @@ class PtpPnpMainWindow(QMainWindow):
         self.lblBoxColors.setText(", ".join(colors) if colors else "---")
 
     def _on_place_box(self, d: dict) -> None:
-        # Big (place) box from /place_box/info: position (centroid) + presence/colour.
-        c = d.get("centroid")
-        if d.get("ok") and c and len(c) == 3:
-            fd = d.get("front_distance")
+        # Big (place) box from /place_box/info. 실제 스키마: 박스=d["wall"](centroid/ok/
+        # front_distance), 색=d["color"](name/confidence). 구버전 최상위 키는 폴백으로 유지.
+        wall = d.get("wall") or {}
+        color = d.get("color") or {}
+        c = wall.get("centroid") or d.get("centroid")
+        present = wall.get("ok", d.get("ok"))
+        if present and c and len(c) == 3:
+            fd = wall.get("front_distance", d.get("front_distance"))
             self.lblBigBox.setText(
                 f"x={c[0]:+.3f} y={c[1]:+.3f} z={c[2]:+.3f} m"
                 + (f" (front {fd:.3f})" if isinstance(fd, (int, float)) else ""))
-            col = d.get("color_name") or "?"
-            conf = d.get("color_conf") or 0.0
+            col = color.get("name") or d.get("color_name") or "?"
+            conf = color.get("confidence") or d.get("color_conf") or 0.0
             self.lblBigBoxColor.setText(f"있음 · {col} ({conf:.2f})")
             # Cache for Auto "컨테이너 색" mode (only a known colour is usable).
             self._container_color = col if col not in ("?", "", "unknown") else None
