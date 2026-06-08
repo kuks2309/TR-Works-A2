@@ -31,6 +31,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -52,7 +53,10 @@
 
 #include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <control_msgs/action/gripper_command.hpp>
+#include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
@@ -119,6 +123,17 @@ public:
     // set to "link7" to constrain link7 directly (like pilz).
     ctrl_suffix_ = this->declare_parameter<std::string>("controlled_link_suffix", "hand_tcp");
 
+    // Approach-move controller selection (verified pick-sequence design, docs/issues_and_fixes/
+    // 2026-06-07_pick_seq_v2_timing.md): the INIT->box approach is a FORWARD-POSITION ramp on
+    // {side}_arm_position_controller, NOT a JTC trajectory. JTC is reserved for the precise
+    // descend (hover->pick), which this hover-only node does not perform. Set
+    // use_forward_position:=false to fall back to the legacy single-endpoint JTC move.
+    use_forward_position_ = this->declare_parameter<bool>("use_forward_position", true);
+    ramp_rate_dps_ = this->declare_parameter<double>("ramp_rate_dps", 90.0);
+    ramp_hz_ = this->declare_parameter<double>("ramp_hz", 50.0);
+    ramp_settle_ = this->declare_parameter<double>("ramp_settle", 0.1);
+    restore_jtc_after_ = this->declare_parameter<bool>("restore_jtc_after", true);
+
     // Load the FULL robot model from /robot_description (latched) — the SAME model
     // robot_state_publisher uses, so the IK solver is guaranteed consistent with TF /
     // the real robot. Per-arm 7-DOF models are built at runtime via buildReducedModel
@@ -149,7 +164,21 @@ public:
         "/" + side + "_joint_trajectory_controller/joint_trajectory", 10);
       grip_client_[side] = rclcpp_action::create_client<GripperCommand>(
         this, "/" + side + "_gripper_controller/gripper_cmd");
+      fpos_pub_[side] = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+        "/" + side + "_arm_position_controller/commands", 10);
     }
+
+    switch_client_ = this->create_client<controller_manager_msgs::srv::SwitchController>(
+      "/controller_manager/switch_controller");
+    joint_states_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+      "/joint_states", rclcpp::QoS(rclcpp::KeepLast(10)),
+      [this](sensor_msgs::msg::JointState::SharedPtr msg) {
+        std::lock_guard<std::mutex> lk(js_mutex_);
+        const size_t n = std::min(msg->name.size(), msg->position.size());
+        for (size_t i = 0; i < n; ++i) {
+          latest_joint_pos_[msg->name[i]] = msg->position[i];
+        }
+      });
 
     action_server_ = rclcpp_action::create_server<AlignToBoxes>(
       this, "/openarmx/ptp_align_to_boxes",
@@ -340,6 +369,138 @@ private:
     return boxes;
   }
 
+  // -------------------------------------------------------- forward position
+  // Latest measured positions for this arm's 7 joints in the controller order
+  // (openarmx_<side>_joint1..7). false if any joint has no /joint_states sample yet.
+  bool currentArmPositions(const std::string & side, std::vector<double> & out)
+  {
+    out.assign(7, 0.0);
+    std::lock_guard<std::mutex> lk(js_mutex_);
+    for (int i = 1; i <= 7; ++i) {
+      const std::string jn = "openarmx_" + side + "_joint" + std::to_string(i);
+      auto it = latest_joint_pos_.find(jn);
+      if (it == latest_joint_pos_.end()) {
+        return false;
+      }
+      out[static_cast<size_t>(i - 1)] = it->second;
+    }
+    return true;
+  }
+
+  // q_goal mapped to this arm's 7 joints in controller order (openarmx_<side>_joint1..7).
+  std::vector<double> goalArmPositions(const std::string & side, const ArmModel & arm,
+                                       const Eigen::VectorXd & q)
+  {
+    std::map<std::string, double> by_name;
+    for (size_t k = 0; k < arm.joint_names.size(); ++k) {
+      by_name[arm.joint_names[k]] = q[arm.q_index[k]];
+    }
+    std::vector<double> out(7, 0.0);
+    for (int i = 1; i <= 7; ++i) {
+      out[static_cast<size_t>(i - 1)] = by_name["openarmx_" + side + "_joint" + std::to_string(i)];
+    }
+    return out;
+  }
+
+  // Activate/deactivate controllers via /controller_manager/switch_controller (STRICT: the
+  // arm_position_controller and JTC share the position interface, so the switch is all-or-nothing).
+  bool switchControllers(const std::vector<std::string> & activate,
+                         const std::vector<std::string> & deactivate)
+  {
+    if (!switch_client_->wait_for_service(std::chrono::seconds(5))) {
+      RCLCPP_ERROR(this->get_logger(), "switch_controller service unavailable.");
+      return false;
+    }
+    auto req = std::make_shared<controller_manager_msgs::srv::SwitchController::Request>();
+    req->activate_controllers = activate;
+    req->deactivate_controllers = deactivate;
+    req->strictness = controller_manager_msgs::srv::SwitchController::Request::STRICT;
+    req->activate_asap = true;
+    req->timeout = rclcpp::Duration::from_seconds(5.0);
+    auto fut = switch_client_->async_send_request(req);
+    if (fut.wait_for(std::chrono::seconds(8)) != std::future_status::ready) {
+      RCLCPP_ERROR(this->get_logger(), "switch_controller timeout.");
+      return false;
+    }
+    return fut.get()->ok;
+  }
+
+  // Forward-position approach: switch this arm onto its arm_position_controller and ramp from
+  // the CURRENT measured config to q_goal under a joint-rate limit (mirrors the verified
+  // experiments/ptp_pick_seq_v2 forward_ramp). Restores JTC afterwards (seeded at the current
+  // pose) so the subsequent JTC descend and other JTC consumers keep working.
+  bool sendForwardRamp(const std::string & side, const ArmModel & arm, const Eigen::VectorXd & q)
+  {
+    const std::string fpos = side + "_arm_position_controller";
+    const std::string jtc = side + "_joint_trajectory_controller";
+    if (!switchControllers({fpos}, {jtc})) {
+      RCLCPP_ERROR(this->get_logger(), "%s: switch to forward position failed.", side.c_str());
+      return false;
+    }
+    std::vector<double> cmd;
+    if (!currentArmPositions(side, cmd)) {
+      RCLCPP_ERROR(this->get_logger(),
+                   "%s: no /joint_states yet; cannot seed forward ramp.", side.c_str());
+      if (restore_jtc_after_) {
+        switchControllers({jtc}, {fpos});
+      }
+      return false;
+    }
+    const std::vector<double> target = goalArmPositions(side, arm, q);
+    const double max_step = (ramp_rate_dps_ * M_PI / 180.0) / std::max(1.0, ramp_hz_);
+    const auto period_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(1.0 / std::max(1.0, ramp_hz_)));
+    int steps = 0;
+    while (rclcpp::ok()) {
+      double max_err = 0.0;
+      for (size_t k = 0; k < 7; ++k) {
+        double d = target[k] - cmd[k];
+        d = std::min(std::max(d, -max_step), max_step);
+        cmd[k] += d;
+        max_err = std::max(max_err, std::abs(target[k] - cmd[k]));
+      }
+      std_msgs::msg::Float64MultiArray m;
+      m.data = cmd;
+      fpos_pub_[side]->publish(m);
+      if (max_err < 1e-3) {
+        break;
+      }
+      std::this_thread::sleep_for(period_ns);
+      if (++steps > 600) {
+        RCLCPP_WARN(this->get_logger(), "%s: forward ramp step cap (600) hit.", side.c_str());
+        break;
+      }
+    }
+    // settle: hold the target briefly so the motors converge before any next phase.
+    const int settle_n = static_cast<int>(ramp_hz_ * ramp_settle_);
+    for (int i = 0; i < settle_n && rclcpp::ok(); ++i) {
+      std_msgs::msg::Float64MultiArray m;
+      m.data = target;
+      fpos_pub_[side]->publish(m);
+      std::this_thread::sleep_for(period_ns);
+    }
+    RCLCPP_INFO(this->get_logger(), "%s: forward-position approach done (%d steps).",
+                side.c_str(), steps);
+    if (restore_jtc_after_ && switchControllers({jtc}, {fpos})) {
+      // Seed the reactivated JTC reference at the current pose (open_loop_control=true) so it
+      // holds here instead of snapping to a stale last-command reference.
+      trajectory_msgs::msg::JointTrajectory warm;
+      warm.joint_names = arm.joint_names;
+      trajectory_msgs::msg::JointTrajectoryPoint pt;
+      {
+        std::lock_guard<std::mutex> lk(js_mutex_);
+        for (const auto & jn : arm.joint_names) {
+          auto it = latest_joint_pos_.find(jn);
+          pt.positions.push_back(it != latest_joint_pos_.end() ? it->second : 0.0);
+        }
+      }
+      pt.time_from_start = rclcpp::Duration::from_seconds(0.2);
+      warm.points.push_back(pt);
+      jtc_pub_[side]->publish(warm);
+    }
+    return true;
+  }
+
   // ------------------------------------------------------------------ trajectory
   // Send a single-endpoint trajectory (current -> q_goal over move_time) to the
   // arm JTC via FollowJointTrajectory; falls back to the topic if the action is
@@ -517,8 +678,14 @@ private:
                     side.c_str(), residual);
       }
       feedback(gh, "moving", 0.8f);
-      bool used_action = false;
-      const bool moved = sendTrajectory(side, arm, q, used_action);
+      bool moved;
+      if (use_forward_position_) {
+        // Approach is a forward-position ramp; JTC is reserved for the descend (see params).
+        moved = sendForwardRamp(side, arm, q);
+      } else {
+        bool used_action = false;
+        moved = sendTrajectory(side, arm, q, used_action);
+      }
       report << ",\"moved\":" << (moved ? "true" : "false") << "}";
       any_moved = any_moved || moved;
     }
@@ -544,6 +711,11 @@ private:
   double ik_damp_;
   int ik_restarts_;
   std::string ctrl_suffix_;
+  bool use_forward_position_;
+  double ramp_rate_dps_;
+  double ramp_hz_;
+  double ramp_settle_;
+  bool restore_jtc_after_;
 
   pinocchio::Model full_model_;
   bool full_model_ready_ {false};
@@ -556,7 +728,12 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr boxes_sub_;
   std::map<std::string, rclcpp_action::Client<FollowJointTrajectory>::SharedPtr> jtc_client_;
   std::map<std::string, rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr> jtc_pub_;
+  std::map<std::string, rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr> fpos_pub_;
   std::map<std::string, rclcpp_action::Client<GripperCommand>::SharedPtr> grip_client_;
+  rclcpp::Client<controller_manager_msgs::srv::SwitchController>::SharedPtr switch_client_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
+  std::mutex js_mutex_;
+  std::map<std::string, double> latest_joint_pos_;
   rclcpp_action::Server<AlignToBoxes>::SharedPtr action_server_;
 };
 
