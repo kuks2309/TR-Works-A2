@@ -57,6 +57,13 @@ def main():
     rbx, rby, rbz = box
     print(f"[{core.SIDE}] box=({rbx:.3f},{rby:+.3f},{rbz:.3f})  [{src}]", flush=True)
 
+    # 재시작/iter 오버라이드 (모듈 전역을 호출 시점에 읽으므로 즉시 반영)
+    for a in sys.argv:
+        if a.startswith("--restarts="):
+            core.IK_RESTARTS = int(a.split("=", 1)[1])
+        if a.startswith("--maxiter="):
+            core.IK_MAX_ITER = int(a.split("=", 1)[1])
+
     ox, oy, oz = core.load_grasp_offset()
     bx, by = rbx + ox, rby + oy
     core.DESCEND_Z = max(core.DESCEND_FLOOR, rbz + oz - core.GRASP_DEPTH)
