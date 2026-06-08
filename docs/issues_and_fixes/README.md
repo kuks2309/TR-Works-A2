@@ -48,3 +48,4 @@ China 모노레포 (openarmx_ws / cyclo_control / calibration / 3d_detect_ws 등
 - [2026-06-07 openarmx_vla → pick_and_place/AI 백엔드 이식 (단일캠+leader-follower) + .gitignore 'AI/' 충돌 해결](2026-06-07_vla_ai_backend_port.md)
 - [2026-06-07 중력 보상 HIL 위치정확도 검증 (OFF 43→ON 9mm, 79%↓) + g_scale 최적화(채택 0.95) + effort 컨트롤러 언로드 결함](2026-06-07_gravity_comp_hil_accuracy.md)
 - [2026-06-07 JTC "덜덜덜" 떨림 진단: 모터 MIT PD 한계진동(KD×양자화 속도노이즈) + 루프 저속/지터(100→55~68Hz), 진단만](2026-06-07_jtc_tremor_diagnosis.md)
+- [2026-06-07 pick 시퀀스 v2 타이밍: IK 82ms(<1%, 병목 아님), 사이클 11.3s, 지배=dwell 3s/셋업 4s/모션, 최적화 24→11s 이력](2026-06-07_pick_seq_v2_timing.md)
