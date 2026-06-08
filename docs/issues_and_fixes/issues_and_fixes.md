@@ -7,6 +7,25 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-09 (KST) — 컨테이너 자동 픽: 색 라벨 불신뢰(place_box+yolo)로 노란 박스 못 집음 → 거리 게이트 + agnostic
+
+### 증상
+"컨테이너 색" 자동 픽 시작했는데 로봇이 안 움직임. 화면상 컨테이너·미니박스 모두 노란색인데 `/place_box/info` 가 컨테이너를 **green 으로 분류** → 게이트가 green lock → `mini-box-green` 만 검출 → 노란 박스 제외 → 양 resident `no_box`.
+
+### 원인 (두 겹)
+1. **(주원인·Claude 실수) 라이브 토픽 오염.** 게이트 검증용 가짜 publisher(`fake_placebox.py`)가 `pkill` 후에도 잔존(`setsid` 분리)해 `/place_box/info` 에 가짜 green 을 발행(Publisher count=3). 진짜 노드는 yellow(h=46) 정상. 상세·재발방지: [docs/claude-mistake/2026-06-09.md](../claude-mistake/2026-06-09.md).
+2. **(잔존 본질) 색 라벨 불신뢰.** 오염 제거 후에도, `mini-box-yellow` 로는 좌측 노란 미니박스가 `/detected_boxes` 에 안 잡힘(=`auto` 일 땐 잡힘) → **yolo 가 노란 미니박스를 yellow 로 라벨 안 함.** 색 신뢰도 문제가 place_box HSV(경계 Yellow[30,70)/Green[70,170)) 뿐 아니라 yolo 라벨에도 존재.
+
+### 수정 / 대응
+- 오염 제거: 잔존 `fake_placebox` 사멸 확인 → `/place_box/info` Publisher 1개, 분류 yellow 정상화.
+- 구조: 신규 `container_pick_gate` 노드가 **거리(TOF)로 컨테이너 유무 판정 + (color_follow 시) 색 시간-다수결 lock** 해 `/pick_color` 구동. UI 는 표시(수신)만, 활성신호 `/container_follow_active` 만 브릿지가 발행. [[container_pick_gate_node]].
+- 권장: 색 라벨이 불안정하므로 **"보이는 박스 다 집어 옮기기"는 agnostic 모드**(색 무관, `/pick_color="auto"`)로 운용. 색별 분류가 목적일 때만 color_follow(yolo/place_box 색 라벨 개선 선행).
+
+### 재발 방지
+- 토픽 값 이상 시 코드 의심 전에 `ros2 topic info <topic>` Publisher count(중복/오염)부터. 테스트 publisher 는 운영 토픽 직접 발행 금지 + 종료 `pgrep` 검증. [[live_topic_test_pollution]].
+
+---
+
 ## 2026-06-09 (KST) — ptp UI 종료 시 왼팔(can3) 토크 안 풀리고 stiff 잔존 — 하드웨어 on_deactivate 중도 SIGKILL
 
 ### 증상
