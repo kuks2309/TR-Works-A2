@@ -368,13 +368,19 @@ class PickV2(Node):
         return qa, ea, ta, qd, ed, td, info, True
 
     def _ref_model(self):
-        """grasp 기준자세 모델(오른팔 데이터 기반) 1회 로드·캐시. 없으면 None."""
+        """grasp 기준자세 모델 1회 로드·캐시. 자기 side 모델 우선, 없으면 right 폴백."""
         if getattr(self, "_refm", "x") != "x":
             return self._refm
         import yaml
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "right_grasp_reference_model.yaml")
-        self._refm = yaml.safe_load(open(path)) if os.path.exists(path) else None
+        base = os.path.dirname(os.path.abspath(__file__))
+        native = os.path.join(base, f"{SIDE}_grasp_reference_model.yaml")
+        if os.path.exists(native):
+            self._refm = yaml.safe_load(open(native))
+            self._refm_native = True          # 자기 side 데이터로 만든 모델 -> yaw 그대로
+        else:
+            fb = os.path.join(base, "right_grasp_reference_model.yaml")
+            self._refm = yaml.safe_load(open(fb)) if os.path.exists(fb) else None
+            self._refm_native = False         # right 모델 폴백 -> left 는 yaw 미러
         return self._refm
 
     def solve_pick_refmodel(self, bx, by, seed):
@@ -391,7 +397,9 @@ class PickV2(Node):
         lo, hi = m.get("tilt_clamp_deg", [10.0, 60.0])
         tilt = max(lo, min(hi, float(tilt)))
         roll0 = float(m.get("roll_deg", 180.0))
-        yaw0 = float(m.get("yaw_deg", 0.0)) * (-1.0 if SIDE == "left" else 1.0)
+        # native(자기 side 데이터) 모델이면 yaw 그대로, right 모델 폴백을 left 가 쓰면 미러(부호반전)
+        yaw_flip = -1.0 if (SIDE == "left" and not getattr(self, "_refm_native", False)) else 1.0
+        yaw0 = float(m.get("yaw_deg", 0.0)) * yaw_flip
         R = pin.rpy.rpyToMatrix(math.radians(roll0), math.radians(-tilt), math.radians(yaw0))
         qa, _, ea, ta = self.solve_pose(bx, by, APPROACH_Z, R, seed)
         qd, _, ed, td = self.solve_pose(bx, by, DESCEND_Z, R, qa)

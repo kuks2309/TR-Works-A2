@@ -20,8 +20,20 @@ import yaml
 import pinocchio as pin
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DS = os.path.join(HERE, "right_grasp_reference_dataset.yaml")
-OUT = os.path.join(HERE, "right_grasp_reference_model.yaml")
+
+
+def _arg_side(argv):
+    for i, a in enumerate(argv):
+        if a.startswith("--side="):
+            return a.split("=", 1)[1]
+        if a == "--side" and i + 1 < len(argv):
+            return argv[i + 1]
+    return "right"
+
+
+SIDE = _arg_side(sys.argv)
+DS = os.path.join(HERE, f"{SIDE}_grasp_reference_dataset.yaml")
+OUT = os.path.join(HERE, f"{SIDE}_grasp_reference_model.yaml")
 
 
 def geodesic_deg(Ra, Rb):
@@ -61,7 +73,7 @@ def main():
     geo = np.array(geo)
 
     model = {
-        "side": "right",
+        "side": SIDE,
         "type": "grasp_orientation_from_box_xy",
         "made_from_points": len(grasp),
         "tilt_plane": {"a_X": round(float(a), 3), "b_absY": round(float(b), 3),

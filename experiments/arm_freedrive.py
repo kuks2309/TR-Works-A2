@@ -85,6 +85,26 @@ def read_joints(node, st, side, spins=40):
     return [math.degrees(st.get(f"openarmx_{side}_joint{i+1}", 0.0)) for i in range(7)]
 
 
+def warmup_hold(node, side, st, t=0.5):
+    """JTC 활성 후 kp 복원 '전'에 현재(손) 자세를 JTC setpoint 로 발행한다.
+    이걸 안 하면 kp 복원 순간 JTC 의 stale setpoint 로 팔이 고속 스냅(위험). kp=0 이라
+    실제로 안 움직이고 setpoint 만 현재자세로 정렬 -> 이후 kp 복원해도 제자리 유지."""
+    pub = node.create_publisher(JointTrajectory, f"/{side}_joint_trajectory_controller/joint_trajectory", 10)
+    for _ in range(20):
+        rclpy.spin_once(node, timeout_sec=0.05)   # 퍼블리셔 매칭 + 최신 /joint_states
+    cur = [st.get(f"openarmx_{side}_joint{i+1}", 0.0) for i in range(7)]
+    jt = JointTrajectory()
+    jt.joint_names = [f"openarmx_{side}_joint{i+1}" for i in range(7)]
+    pt = JointTrajectoryPoint()
+    pt.positions = cur
+    pt.time_from_start = Duration(sec=0, nanosec=int(t * 1e9))
+    jt.points = [pt]
+    pub.publish(jt)
+    for _ in range(int((t + 0.4) / 0.05)):
+        rclpy.spin_once(node, timeout_sec=0.05)
+    return [round(math.degrees(c), 1) for c in cur]
+
+
 def goto_home(node, side, init_deg, st, t=MOVE_T):
     pub = node.create_publisher(JointTrajectory, f"/{side}_joint_trajectory_controller/joint_trajectory", 10)
     for _ in range(20):
@@ -126,6 +146,8 @@ def main():
             print(f"[{side}] 홈(INIT) 이동")
             if ctrl_state(n, jtc) != "active":
                 print(f"  - {jtc} 활성:", "ok" if switch(n, activate=[jtc]) else "FAIL")
+            # kp 복원 전 현재자세를 setpoint 로 정렬(고속 스냅 방지)
+            print(f"  - 현재자세 setpoint 정렬: {warmup_hold(n, side, st)}")
             print(f"  - kp 복원:", "ok" if set_kp(n, side, KP_FACTORY) else "FAIL")
             cur, err = goto_home(n, side, INIT_DEG, st)
             print(f"  -> 도달 {[round(c,1) for c in cur]}  목표 {INIT_DEG}  최대오차 {err:.1f}°")
@@ -146,10 +168,13 @@ def main():
 
         else:  # restore
             print(f"[{side}] 자유 구동 OFF + 홈 복귀")
-            print(f"  1) {jtc} 활성(현재자세 캡처):", "ok" if switch(n, activate=[jtc]) else "FAIL")
-            print(f"  2) kp 복원 {KP_FACTORY}:", "ok" if set_kp(n, side, KP_FACTORY) else "FAIL")
+            print(f"  1) {jtc} 활성:", "ok" if switch(n, activate=[jtc]) else "FAIL")
+            # *** 안전 핵심: kp 복원 '전'에 현재(손)자세를 JTC setpoint 로 발행 -> 고속 스냅 방지 ***
+            held = warmup_hold(n, side, st)
+            print(f"  2) 현재자세 읽어 setpoint 정렬: {held}")
+            print(f"  3) kp 복원 {KP_FACTORY}:", "ok" if set_kp(n, side, KP_FACTORY) else "FAIL")
             cur, err = goto_home(n, side, INIT_DEG, st)
-            print(f"  3) 홈 이동 -> 도달 {[round(c,1) for c in cur]}  최대오차 {err:.1f}°")
+            print(f"  4) 원점(홈) 복귀 -> 도달 {[round(c,1) for c in cur]}  최대오차 {err:.1f}°")
             print("  " + ("홈 복귀 OK" if err <= HOME_TOL_DEG else f"!! 홈 미도달(오차 {err:.1f}°)"))
         return 0
     finally:

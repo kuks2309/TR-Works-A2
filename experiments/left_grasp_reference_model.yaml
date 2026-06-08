@@ -1,0 +1,20 @@
+side: left
+type: grasp_orientation_from_box_xy
+made_from_points: 17
+tilt_plane:
+  a_X: 66.126
+  b_absY: 1.734
+  c: -4.926
+  formula: tilt_deg = a_X*box_X + b_absY*abs(box_Y) + c
+roll_deg: 180.0
+yaw_deg: -1.22
+tilt_clamp_deg:
+- 10.0
+- 60.0
+R_construction: pin.rpy.rpyToMatrix(rad(roll_deg), rad(-tilt_deg), rad(yaw_deg))
+fit_quality:
+  tilt_rmse_deg: 2.49
+  orient_geodesic_max_deg: 8.01
+  orient_geodesic_mean_deg: 5.69
+usage: 박스 (X,Y) -> tilt=clamp(a_X*X+b_absY*|Y|+c) -> R=rpyToMatrix(180,-tilt,yaw0).
+  접근/하강 모두 이 R 로 solve_pose(6D IK).
