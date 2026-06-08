@@ -109,14 +109,17 @@ def run_pick(node, run=True):
     node.do_switch([FPOS], [JTC])
     node.forward_ramp(retr, "상승")
     gripped = node.grip_status("파지검증")
-    node.do_switch([JTC], [FPOS])
+    # 컨테이너(드롭) 이동도 forward position (설계 확정: 상승/컨테이너 이동=forward).
+    # 상승 직후 FPOS 가 활성이므로 그대로 두고 박스접근지점→드랍→복귀를 forward_ramp 로 이동.
+    # 기존 goto_joint(JTC)은 호출마다 워밍업+0.85s 라 뒷절반이 느렸음 → 설계 일치 + 단축.
     if gripped:
-        node.goto_joint(core.APPROACH_POINT_DEG, "박스접근지점")
-        node.goto_joint(core.DROP_POINT_DEG, "박스드랍위치")
+        node.forward_ramp(np.radians(core.APPROACH_POINT_DEG), "박스접근지점")
+        node.forward_ramp(np.radians(core.DROP_POINT_DEG), "박스드랍위치")
         node.gripper(core.GRIP_OPEN, "drop", block=False, settle_after=0.3)
-        node.goto_joint(core.APPROACH_POINT_DEG, "박스접근지점(복귀)")
-    # INIT 은 항상 그리퍼 열림 상태로 복귀 (실패 시 쥐고 있던 것도 여기서 놓음)
+        node.forward_ramp(np.radians(core.APPROACH_POINT_DEG), "박스접근지점(복귀)")
+    # INIT 복귀만 JTC (설계대로). FPOS→JTC 전환 후 복귀.
     node.gripper(core.GRIP_OPEN, "INIT 복귀-열기", block=False, settle_after=0.2)
+    node.do_switch([JTC], [FPOS])
     node.goto_init()
     box = tuple(round(v, 4) for v in (rbx, rby, rbz))
     return {"ok": True, "gripped": bool(gripped), "box": box, "info": info}
