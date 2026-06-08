@@ -219,10 +219,10 @@ def build_presets(cfg: dict) -> dict:
             "widgets": ("btnRvizStart", "btnRvizStop", "lblRviz"),
         },
         # TOF 수신: ESP32-C3(VL53L0X) USB-serial(/dev/ttyACM0,115200) → /tof/range.
-        # 노드 기본 파라미터가 place_box_detection.yaml 의 tof_serial_driver 와 동일해
+        # 노드 기본 파라미터가 openarmx_tof_driver 의 tof_driver.yaml 과 동일해
         # 단독 `ros2 run` 으로 충분(검출/벽 노드 없이 수신만).
         "tof": {
-            "cmd": ["ros2", "run", "place_box_detection",
+            "cmd": ["ros2", "run", "openarmx_tof_driver",
                     "tof_serial_driver_node"],
             "confirm": False,
             "nodes": ["/tof_serial_driver"],

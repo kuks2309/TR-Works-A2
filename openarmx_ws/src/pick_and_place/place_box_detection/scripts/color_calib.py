@@ -11,7 +11,7 @@ USAGE (one colour at a time; place that colour's box in front, then):
 
 PREREQUISITES (verify they are actually publishing, not just "running"):
     - D435 cloud : /camera/camera/depth/color/points
-    - TOF range  : /tof/range            (place_box_detection tof_serial_driver)
+    - TOF range  : /tof/range            (openarmx_tof_driver tof_serial_driver)
     - body TF    : openarmx_body_link0 <- camera_depth_optical_frame
                    (needs robot_state_publisher, e.g. 하드웨어 SIL)
 

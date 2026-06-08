@@ -41,15 +41,15 @@ ament_target_dependencies(place_box_detection_node
   rclcpp sensor_msgs std_msgs geometry_msgs visualization_msgs
   tf2 tf2_ros tf2_eigen pcl_conversions)
 
-# ---- TOF USB-serial driver node ----
-add_executable(tof_serial_driver_node src/tof_serial_driver_node.cpp)
-ament_target_dependencies(tof_serial_driver_node rclcpp sensor_msgs)
+# NOTE: the TOF USB-serial transport driver moved to the hardware-layer package
+# openarmx_tof_driver (openarmx_ws/src/Sensor/TOF). This package only consumes
+# /tof/range via the tof_gate stage; it no longer builds the driver.
 
 install(TARGETS ${PROJECT_NAME}_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
-install(TARGETS place_box_detection_node tof_serial_driver_node
+install(TARGETS place_box_detection_node
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})

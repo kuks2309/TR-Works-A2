@@ -49,8 +49,10 @@
   <exec_depend>openarmx_ptp_box_align</exec_depend>
   <!-- hardware / D435 camera / RViz launch + scenario rviz config -->
   <exec_depend>openarmx_scenario_player</exec_depend>
-  <!-- TOF receiver node (tof_serial_driver_node → /tof/range) -->
+  <!-- place-box detection pipeline launch (place_box_detection.launch.py) -->
   <exec_depend>place_box_detection</exec_depend>
+  <!-- TOF transport driver node (tof_serial_driver_node → /tof/range) -->
+  <exec_depend>openarmx_tof_driver</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

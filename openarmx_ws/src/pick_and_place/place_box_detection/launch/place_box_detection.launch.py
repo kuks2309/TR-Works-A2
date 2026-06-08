@@ -7,8 +7,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -22,7 +23,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "use_tof_driver", default_value="false",
-            description="Also start the TOF USB-serial driver (/dev/ttyACM0)."),
+            description="Also start the TOF driver (openarmx_tof_driver, /dev/ttyACM0)."),
 
         Node(
             package="place_box_detection",
@@ -32,12 +33,13 @@ def generate_launch_description():
             parameters=[params],
         ),
 
-        Node(
-            package="place_box_detection",
-            executable="tof_serial_driver_node",
-            name="tof_serial_driver",
-            output="screen",
-            parameters=[params],
+        # The TOF transport driver now lives in the hardware-layer package
+        # openarmx_tof_driver; optionally bring it up here for convenience
+        # (default off, since it is usually launched on its own).
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory("openarmx_tof_driver"),
+                "launch", "tof_driver.launch.py")),
             condition=IfCondition(use_tof),
         ),
     ])

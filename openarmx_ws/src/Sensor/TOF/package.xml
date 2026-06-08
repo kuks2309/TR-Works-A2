@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>openarmx_tof_driver</name>
+  <version>0.0.1</version>
+  <description>
+    Hardware-layer TOF(Time Of Flight) sensor transport driver. Reads the
+    ESP32-C3(VL53L0X) ToF2CAN board over USB-CDC serial (/dev/ttyACM0) and
+    republishes the range as sensor_msgs/Range on /tof/range. Transport-only:
+    any consumer (e.g. place_box_detection wall gate) subscribes to /tof/range
+    and does not care how it is produced. Device firmware lives in firmware/.
+  </description>
+  <maintainer email="kukwonko@gmail.com">kuks2309</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -23,7 +23,7 @@
 
 using namespace std::chrono_literals;
 
-namespace place_box_detection
+namespace openarmx_tof_driver
 {
 
 class TofSerialDriver : public rclcpp::Node
@@ -137,12 +137,12 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
-}  // namespace place_box_detection
+}  // namespace openarmx_tof_driver
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<place_box_detection::TofSerialDriver>());
+  rclcpp::spin(std::make_shared<openarmx_tof_driver::TofSerialDriver>());
   rclcpp::shutdown();
   return 0;
 }
