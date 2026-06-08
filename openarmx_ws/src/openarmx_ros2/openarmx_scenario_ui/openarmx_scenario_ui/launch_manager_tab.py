@@ -89,13 +89,24 @@ PRESETS = [
     {
         "key": "controllers",
         "group": "L1 · 컨트롤러 (Controllers) — L0 필요",
-        "label": "컨트롤러 스폰 — joint_state_broadcaster + 좌우 관절궤적 컨트롤러 + 그리퍼",
-        "cmd": ["ros2", "run", "controller_manager", "spawner",
-                "joint_state_broadcaster",
-                "left_joint_trajectory_controller",
-                "right_joint_trajectory_controller",
-                "left_gripper_controller", "right_gripper_controller",
-                "-c", "/controller_manager", "--unload-on-kill"],
+        "label": "컨트롤러 스폰 — JSB + 좌우 JTC + 그리퍼 + arm_position(inactive)",
+        # Two spawners in parallel: the active set (JSB + L/R JTC + grippers) AND
+        # the L/R arm_position_controllers loaded --inactive. The pick sequence
+        # (ptp_pick_seq_v2) switches each arm between its JTC and arm_position
+        # (forward_position) controller — they SHARE the position command
+        # interface, so arm_position must be pre-loaded inactive while JTC is
+        # active. `--inactive` applies to a whole spawner call (can't be mixed
+        # into the active one), hence two spawners; both --unload-on-kill so Stop
+        # unloads everything for a clean restart.
+        "cmd": ["bash", "-c",
+                "ros2 run controller_manager spawner joint_state_broadcaster "
+                "left_joint_trajectory_controller right_joint_trajectory_controller "
+                "left_gripper_controller right_gripper_controller "
+                "-c /controller_manager --unload-on-kill & "
+                "ros2 run controller_manager spawner "
+                "left_arm_position_controller right_arm_position_controller "
+                "--inactive -c /controller_manager --unload-on-kill & "
+                "wait"],
         "confirm": False,
         "nodes": ["/left_joint_trajectory_controller",
                   "/right_joint_trajectory_controller"],
