@@ -87,17 +87,18 @@ GRIP_DETECT_MARGIN = 0.003   # 절대 임계 폴백(캘리브 실패 시). 평�
 GRIP_CALIB_MARGIN = 0.001    # 기동 캘리브: 임계 = 측정한 빈손바닥 + 이 값(상대 판정). 드리프트 흡수
 
 IK_EPS, IK_MAX_ITER, IK_DT, IK_DAMP, IK_RESTARTS = 1e-4, 1000, 0.1, 1e-6, 20
-RAMP_RATE_DPS = 60.0     # forward position 최대 관절속도 [deg/s] (튜닝: --rate)
+RAMP_RATE_DPS = 90.0     # forward position 최대 관절속도 [deg/s] (튜닝: --rate)
 RAMP_HZ = 50.0
-JTC_MOVE_TIME = 1.3      # JTC 하강 시간 [s] (튜닝: --descend)
-INIT_TIME = 1.5          # INIT 복귀 시간 [s] (튜닝: --init)
-SETTLE = 0.2             # 이동 후 정착 여유 [s] (튜닝: --settle)
-GRASP_SETTLE = 0.9       # 파지(비차단) 후 정착 [s] (튜닝: --grasp-settle)
+JTC_MOVE_TIME = 0.8      # JTC 하강 시간 [s] (튜닝: --descend)
+INIT_TIME = 0.85          # INIT 복귀 시간 [s] (튜닝: --init)
+SETTLE = 0.1             # 이동 후 정착 여유 [s] (튜닝: --settle)
+GRASP_SETTLE = 0.55       # 파지(비차단) 후 정착 [s] (튜닝: --grasp-settle)
 WARMUP_T = 0.1           # JTC 스위치 후 워밍업 궤적 시간 [s]
 
 # 중간자세(테이블 충돌 방지): INIT 자세 유지한 채 X +7cm 앞으로, z>=0.75 로 이동
 MID_X_FWD = 0.07         # INIT TCP 에서 X 앞으로 [m]
 MID_MIN_Z = 0.75         # 중간자세 최소 높이 [m]
+PICK_MAX_X = 0.46        # 이 X[m] 이상은 큰(place) 박스 검출 -> 미니박스 픽 대상에서 제외
 
 # 파지 자세 pitch 상한 [deg]. 비스듬은 유리하나 이 이상 앞으로 숙이면 파지 실패 ->
 # |pitch|<=PITCH_MAX 해를 우선 채택(자연 슬랜티드 유지), 과도하면 다른 IK 해 탐색.
@@ -186,10 +187,11 @@ class PickV2(Node):
             self.boxes = [(p.position.x, p.position.y, p.position.z) for p in m.poses]
             # 측면 분담(중앙 Y=0 기준): 오른쪽(Y<0)=오른팔, 왼쪽(Y>0)=왼팔.
             # 그 중 X 최소(가까울수록 쉽게 잡음 — far 신전/droop 회피)를 선택.
+            # X>=PICK_MAX_X 는 큰(place) 박스 검출 -> 픽 대상 제외. 측면(중앙 Y=0)으로 좌우 분담.
             if SIDE == "right":
-                cand = [b for b in self.boxes if b[1] < 0.0]
+                cand = [b for b in self.boxes if b[1] < 0.0 and b[0] < PICK_MAX_X]
             else:
-                cand = [b for b in self.boxes if b[1] > 0.0]
+                cand = [b for b in self.boxes if b[1] > 0.0 and b[0] < PICK_MAX_X]
             # 엄격 분리: 자기 측면에 박스 없으면 안 잡고 대기(None). 반대편으로 절대 안 넘어감.
             self.box = min(cand, key=lambda b: b[0]) if cand else None
 
@@ -401,11 +403,24 @@ class PickV2(Node):
         yaw_flip = -1.0 if (SIDE == "left" and not getattr(self, "_refm_native", False)) else 1.0
         yaw0 = float(m.get("yaw_deg", 0.0)) * yaw_flip
         R = pin.rpy.rpyToMatrix(math.radians(roll0), math.radians(-tilt), math.radians(yaw0))
-        qa, _, ea, ta = self.solve_pose(bx, by, APPROACH_Z, R, seed)
+        # 접근(박스 위 경유점): APPROACH_Z 부터 낮춰가며 '도달 가능한 가장 높은' 접근을 선택.
+        # 근접 박스는 z=0.88 도달 불가하지만 더 낮은(박스 위) 접근은 도달 -> 학습 파지를 살림.
+        # 하한은 박스 위 유지(DESCEND_Z+0.05). 하강(실제 파지=학습 자세)만 엄격 판정.
+        qa = ta = None
+        ea = 99.0
+        az = APPROACH_Z
+        z = APPROACH_Z
+        while z >= DESCEND_Z + 0.05 - 1e-9:
+            q_, _, e_, t_ = self.solve_pose(bx, by, z, R, seed)
+            if e_ < ea:
+                qa, ta, ea, az = q_, t_, e_, z
+            if e_ <= 8.0:
+                break
+            z -= 0.01
         qd, _, ed, td = self.solve_pose(bx, by, DESCEND_Z, R, qa)
-        ok = (ea <= 5.0 and ed <= 5.0)
+        ok = (ed <= 5.0 and ea <= 35.0)        # 파지(하강) 엄격, 접근은 도달가능 best
         info = (f"기준자세 tilt={tilt:.1f}° (roll{roll0:.0f}/yaw{yaw0:+.1f}) "
-                f"접근err={ea:.1f}mm 하강err={ed:.1f}mm")
+                f"접근z={az:.2f} err={ea:.1f}mm 하강err={ed:.1f}mm")
         return qa, ea, ta, qd, ed, td, info, ok
 
     def gripper_tilt_deg(self, q):
@@ -512,7 +527,7 @@ class PickV2(Node):
         init = np.array([math.radians(d) for d in INIT_DEG])
         # 짧은 워밍업 발행로 스위치 직후 JTC 레퍼런스 정렬 (최소 대기)
         self._jtc_send(self.arm_q(), WARMUP_T, "warmup")
-        self.wait(0.25)
+        self.wait(0.1)
         self._jtc_send(init, t, "INIT")
         self.wait(t + SETTLE)
 
@@ -522,7 +537,7 @@ class PickV2(Node):
             t = INIT_TIME
         tgt = np.array([math.radians(d) for d in deg])
         self._jtc_send(self.arm_q(), WARMUP_T, "warmup")
-        self.wait(0.25)
+        self.wait(0.1)
         self._jtc_send(tgt, t, label)
         self.wait(t + SETTLE)
 

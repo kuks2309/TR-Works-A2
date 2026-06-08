@@ -365,6 +365,15 @@ class PtpPnpMainWindow(QMainWindow):
             "source /opt/ros/humble/setup.bash && "
             f"source {_R}/openarmx_ws/install/setup.bash && "
             f"source {_R}/3d_detect_ws/install/setup.bash && "
+            # bash '&' 는 '&&' 보다 우선순위가 낮다 → 중괄호 그룹으로 묶지 않으면
+            # 위 source 가 첫 잡(box_detect_loop)에만 적용되고 좌/우 resident 는
+            # sourcing 없이 떠서 yolov8_detection_msgs import 실패로 죽는다.
+            # { ...; } 로 세 잡을 묶어 동일 sourced 환경을 모두 상속하게 한다.
+            "{ "
+            # 검출/이동 분리: box_detect_loop 가 /detected_boxes 를 연속 갱신하고,
+            # 좌/우 resident 는 검출 트리거 없이 최신 박스만 소비 → 전환 지연 제거.
+            # 반드시 resident 보다 먼저 띄워 첫 픽부터 최신 박스가 있게 한다.
+            f"python3 {_R}/experiments/box_detect_loop.py & "
             # NOTE: ptp_pick_resident.py reads SIDE only from the "--side=right"
             # (equals) form; "--side right" (space) is NOT recognised and both
             # residents would default to left → the right arm is never driven and
@@ -372,7 +381,7 @@ class PtpPnpMainWindow(QMainWindow):
             f"python3 {_R}/experiments/ptp_pick_resident.py --side=left "
             "--ros-args -r __node:=ptp_pick_left & "
             f"python3 {_R}/experiments/ptp_pick_resident.py --side=right "
-            "--ros-args -r __node:=ptp_pick_right & wait"]
+            "--ros-args -r __node:=ptp_pick_right & wait; }"]
         self.btnSrvStart.clicked.connect(self._start_pick_servers)
         self.btnSrvStop.clicked.connect(self._stop_pick_servers)
 
@@ -536,6 +545,7 @@ class PtpPnpMainWindow(QMainWindow):
     def _stop_pick_servers(self) -> None:
         self._pick_srv_proc.stop()
         self._kill_pattern("ptp_pick_resident")
+        self._kill_pattern("box_detect_loop")
         self.lblPnpStatus.setText("픽 서버 상태: 정지")
 
     def _auto_start_rviz(self) -> None:
@@ -1167,4 +1177,5 @@ class PtpPnpMainWindow(QMainWindow):
             pass
         self._pick_srv_proc.stop()
         self._kill_pattern("ptp_pick_resident")
+        self._kill_pattern("box_detect_loop")
         event.accept()

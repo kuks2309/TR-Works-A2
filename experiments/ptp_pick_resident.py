@@ -78,12 +78,14 @@ def run_pick(node, run=True):
     appr, desc, retr = node.target_arm(qa), node.target_arm(qd), node.target_arm(qr)
     cur = node.arm_q()
 
-    # 안전 가드
+    # 안전 가드: 하강(실제 파지)은 엄격 5mm, 접근/상승/중간(경유점, 적응형이라 오차 큼)은 느슨 35mm.
+    # (refmodel 의 ea<=35mm 수락과 일치시킴 — 안 그러면 근접 박스가 가드에 걸려 SAFE-ABORT)
     problems = []
-    for nm, q, e in (("중간", mid, e_mid), ("접근", appr, ea), ("하강", desc, ed), ("상승", retr, er)):
+    for nm, q, e, lim in (("중간", mid, e_mid, 35.0), ("접근", appr, ea, 35.0),
+                          ("하강", desc, ed, 5.0), ("상승", retr, er, 35.0)):
         if not np.all(np.isfinite(q)):
             problems.append(f"{nm}:NaN")
-        elif e > 5.0:
+        elif e > lim:
             problems.append(f"{nm}:err{e:.1f}")
     if np.all(np.isfinite(appr)) and np.degrees(np.max(np.abs(appr - cur))) > 120.0:
         problems.append("접근이동>120")
@@ -152,6 +154,7 @@ class ResidentPick:
         self._busy = False
         self._ok = 0
         self._ng = 0
+        self._pending_box = None   # 검출 캐시: 대기 중 재검출 회피 -> 팔 전환 즉시
         self._calibrate_grip()   # 빈손 바닥 측정 -> 상대 임계(self.node.grip_thr). 끝나면 INIT=열림
         self._pub_status(f"resident {core.SIDE} 준비 완료")
 
@@ -231,21 +234,25 @@ class ResidentPick:
         if gh and gh.accepted:
             rfut = gh.get_result_async()
             rclpy.spin_until_future_complete(self.node, rfut, timeout_sec=20.0)
-        for _ in range(20):
+        for _ in range(8):
             rclpy.spin_once(self.node, timeout_sec=0.05)   # _box_cb 갱신
 
     def _do_one(self, color):
-        # 충돌방지: 단일팔 모드면 뮤텍스 획득(실패=타팔 동작중 -> 양보). _allow_dual 이면 동시 허용.
+        # 검출/이동 분리: 검출은 box_detect_loop 노드가 연속 수행 -> 여기선 트리거 없이
+        # 최신 /detected_boxes(=self.node.box) 만 소비한다. 최신 반영 위해 짧게 스핀.
+        for _ in range(3):
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+        box = self.node.box
+        if box is None:
+            self._pub_status("no_box")
+            return {"ok": False, "info": "no_box"}
+        # 모션(run_pick)만 뮤텍스 — 타팔 모션 중이면 양보(다음 틱 즉시 재시도, 검출 트리거 없음).
         if not self._allow_dual and not self._acquire_arm_lock():
             self._pub_status("대기(타팔 동작중)")
             return {"ok": False, "info": "busy_other_arm"}
         try:
-            self.node.box = None
-            self._trigger_detect(color)
-            if self.node.box is None:
-                self._pub_status("no_box")
-                return {"ok": False, "info": "no_box"}
-            self._pub_status(f"picking {core.SIDE} box=({self.node.box[0]:.2f},{self.node.box[1]:+.2f})")
+            self.node.box = box                     # 잠금 시점 박스로 고정해 픽
+            self._pub_status(f"picking {core.SIDE} box=({box[0]:.2f},{box[1]:+.2f})")
             r = run_pick(self.node, run=True)
             if r.get("gripped"):
                 self._ok += 1; self._pub_status(f"ok box={r.get('box')} [성공 {self._ok}]")
