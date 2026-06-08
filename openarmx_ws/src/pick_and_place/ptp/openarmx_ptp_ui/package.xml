@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>openarmx_ptp_ui</name>
+  <version>0.1.0</version>
+  <description>
+    PyQt5 GUI dedicated to the ptp pick-and-place backend. Buttons to start/stop
+    the full operation pipeline (hardware, controllers, D435 camera,
+    remote-detect + perception, ptp align backend, RViz) with live status, plus a
+    Run/Cancel control for the AlignToBoxes action via an in-process rclpy action
+    client. Display (Qt .ui) is separated from drive (process manager + ROS bridge).
+  </description>
+  <maintainer email="kukwonko@gmail.com">openarmx</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <!-- Detection tab video (camera + YOLO overlay) + 3D point cloud -->
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <!-- 3D point-cloud view uses pyqtgraph + PyOpenGL (installed via pip user; no rosdep key) -->
+
+  <!-- Pipe Health tab (topic rate monitoring) -->
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+
+  <!-- Motion Jog tab (Cartesian via TF + Joint via /joint_states; HOME/INIT via JTC) -->
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+
+  <!-- Launch-tab targets started via ros2 launch -->
+  <exec_depend>openarmx_gravity_comp</exec_depend>
+  <exec_depend>ee_leader_marker</exec_depend>
+
+  <!-- in-process AlignToBoxes action client -->
+  <exec_depend>openarmx_ptp_box_align_msgs</exec_depend>
+  <!-- ptp align backend launch (ptp_box_align.launch.py) -->
+  <exec_depend>openarmx_ptp_box_align</exec_depend>
+  <!-- hardware / D435 camera / RViz launch + scenario rviz config -->
+  <exec_depend>openarmx_scenario_player</exec_depend>
+  <!-- TOF receiver node (tof_serial_driver_node → /tof/range) -->
+  <exec_depend>place_box_detection</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

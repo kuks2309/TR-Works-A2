@@ -1,0 +1,31 @@
+# openarmx_ptp_ui 운용값 (load-only · 이 파일을 직접 편집)
+#
+# UI 시작 시 한 번 읽어 launch 명령·골 기본값·상태 타이머·액션 이름에 반영한다.
+# 저장(쓰기) 기능 없음 — 값 변경은 이 파일을 편집하고 UI 를 재기동한다.
+# 누락된 키는 app_config.DEFAULTS 로 보완되므로 일부만 적어도 동작한다.
+# (launch 의 노드/프로세스 패턴·sweep 등 내부 식별자는 코드에 유지 — 운용값 아님.)
+
+# AlignToBoxes 액션 이름 (ptp_box_align_node 가 광고하는 액션).
+action_name: /openarmx/ptp_align_to_boxes
+
+# launch 상태 표시(● Stopped / Running) 갱신 주기 (ms).
+status_timer_ms: 2000
+
+# 원격검출+인지 launch 전에 source 할 3d_detect_ws 설치 setup (별도 워크스페이스).
+detect_ws_setup: /home/openarmx/TR-Works/kkw/China/3d_detect_ws/install/setup.bash
+
+# 실로봇 하드웨어 CAN 인터페이스. follower 팔 = can2(right)/can3(left)
+# (can0/can1 은 leader 텔레옵 입력). pick 은 follower 에서 수행.
+hw_can:
+  right: can2
+  left: can3
+  mode: mit        # control_mode
+  can_fd: false
+
+# AlignToBoxes 골 입력칸의 시작 기본값.
+goal_defaults:
+  z: 0.80          # TCP(hand_tcp) 목표 높이 (base, m). 책상 0.72, 박스 top≈0.78.
+  roll_deg: 180.0  # 수직 하강(hand-down)
+  pitch_deg: 0.0
+  yaw_deg: 0.0
+  arms: both       # both | left | right
