@@ -15,6 +15,8 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(openarmx_ptp_box_align_msgs REQUIRED)
@@ -28,6 +30,8 @@ ament_target_dependencies(ptp_box_align_node
   std_msgs
   trajectory_msgs
   control_msgs
+  controller_manager_msgs
+  sensor_msgs
   openarmx_ptp_box_align_msgs
 )
 # Pinocchio is pulled in via its exported CMake target (links Eigen + URDF parser).

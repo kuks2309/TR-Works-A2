@@ -20,6 +20,8 @@
   <depend>std_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>control_msgs</depend>
+  <depend>controller_manager_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>eigen</depend>
   <depend>pinocchio</depend>
   <depend>openarmx_ptp_box_align_msgs</depend>
