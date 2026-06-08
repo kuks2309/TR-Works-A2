@@ -310,6 +310,9 @@ class PtpPnpMainWindow(QMainWindow):
         # YOLO overlay toggle + one-shot detect trigger (Detection tab).
         self._overlay_on = False
         self._has_annot = False
+        # Latest detected container (big place-box) colour from /place_box/info,
+        # used by Auto mode when "컨테이너 색" is selected. None = none/unknown.
+        self._container_color = None
         self.chkOverlay.toggled.connect(self._on_overlay_toggled)
         self.btnDetectOnce.clicked.connect(self._detect_once)
         # Detection-tab sensor/detect readout (laser distance + box colours).
@@ -334,8 +337,10 @@ class PtpPnpMainWindow(QMainWindow):
         from PyQt5.QtWidgets import QCheckBox, QComboBox, QLabel, QHBoxLayout, QWidget
         _gl = self.grpAuto.layout()
         self.comboColorAuto = QComboBox(self.grpAuto)
-        self.comboColorAuto.addItems(["전체(모든 색)", "빨강", "노랑", "녹색", "파랑", "주황"])
-        self.comboColorAuto.setToolTip("자동 picking 대상 색 (전체=색 무관하게 잡음)")
+        self.comboColorAuto.addItems(["전체(모든 색)", "빨강", "노랑", "녹색", "파랑", "주황",
+                                      "컨테이너 색"])
+        self.comboColorAuto.setToolTip(
+            "자동 picking 대상 색 (전체=색 무관 / 컨테이너 색=검출된 큰 박스 색과 같은 색만 집음)")
         _arow = QWidget(self.grpAuto)
         _al = QHBoxLayout(_arow)
         _al.setContentsMargins(0, 0, 0, 0)
@@ -343,9 +348,9 @@ class PtpPnpMainWindow(QMainWindow):
         _al.addWidget(self.comboColorAuto)
         if _gl is not None:
             _gl.addWidget(_arow)
-        # 자동 시작은 '자동 전용' 콤보 사용(수동 comboColorPnp 와 분리)
-        self.btnAutoStart.clicked.connect(
-            lambda: self._pick_bridge.auto_start(self.comboColorAuto.currentText()))
+        # 자동 시작은 '자동 전용' 콤보 사용(수동 comboColorPnp 와 분리).
+        # "컨테이너 색" 선택 시 검출된 큰 박스 색을 픽 색으로 사용(_auto_start).
+        self.btnAutoStart.clicked.connect(self._auto_start)
         self.btnAutoStop.clicked.connect(self._pick_bridge.auto_stop)
         # 양팔 동시 구동 허용 체크박스 — 기본 OFF=단일팔(충돌방지 뮤텍스), ON=동시 허용
         self.chkDualArm = QCheckBox("양팔 동시 구동 허용", self.grpAuto)
@@ -696,9 +701,34 @@ class PtpPnpMainWindow(QMainWindow):
             col = d.get("color_name") or "?"
             conf = d.get("color_conf") or 0.0
             self.lblBigBoxColor.setText(f"있음 · {col} ({conf:.2f})")
+            # Cache for Auto "컨테이너 색" mode (only a known colour is usable).
+            self._container_color = col if col not in ("?", "", "unknown") else None
         else:
             self.lblBigBox.setText("미검출")
             self.lblBigBoxColor.setText("없음")
+            self._container_color = None
+
+    # place_box colour name (english, from /place_box/info) -> Auto combo key.
+    _ENG2KOR = {"red": "빨강", "yellow": "노랑", "green": "녹색",
+                "blue": "파랑", "orange": "주황"}
+
+    def _auto_start(self) -> None:
+        """Auto-start picking. For "컨테이너 색" the pick colour follows the live
+        detected container colour (from /place_box/info); otherwise use the combo
+        selection as-is."""
+        sel = self.comboColorAuto.currentText()
+        if sel == "컨테이너 색":
+            kor = self._ENG2KOR.get((self._container_color or "").lower())
+            if kor is None:
+                self._set_status(
+                    "컨테이너 색 미검출/불명 — 큰박스(place) 검출을 띄우고 컨테이너를 비춘 뒤 시작하세요")
+                self.lblPnpStatus.setText("픽 서버 상태: 컨테이너 색 없음 — 자동 시작 보류")
+                return
+            self.lblPnpStatus.setText(
+                f"픽 서버 상태: 컨테이너 색 = {self._container_color} → {kor} 자동 픽")
+            self._pick_bridge.auto_start(kor)
+        else:
+            self._pick_bridge.auto_start(sel)
 
     def _setup_cloud_view(self) -> None:
         """Embed pyqtgraph OpenGL point-cloud views in BOTH right panes (Detection
