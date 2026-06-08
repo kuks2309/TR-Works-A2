@@ -18,11 +18,23 @@ if ! command -v pip >/dev/null 2>&1; then
   exit 1
 fi
 
+# 빌드 전제: 아래 --no-build-isolation 은 env 의 setuptools 로 빌드하므로 미리 확보한다.
+echo "[INFO] 빌드 의존성 확보 (setuptools>=64 / wheel / setuptools_scm)"
+pip install -q -U "setuptools>=64" wheel setuptools_scm
+
+# 설치 플래그 (이 워크스페이스에서 검증된 incantation):
+#   --no-deps            : lerobot 는 별도 설치, rclpy 는 시스템 ROS2 제공(PyPI 에 없음).
+#                          빼면 pip 가 PyPI 에서 rclpy 를 풀려다 의존성 백트래킹에 멈춘다(행).
+#   --no-build-isolation : env 의 setuptools(>=64)로 빌드 → pyproject [project]/[entry-points]
+#                          정상 인식 + PEP 660 editable. (격리 빌드 시 leader 가 'UNKNOWN' 으로
+#                          빌드돼 entry-point 가 등록되지 않는 문제 회피)
+PIP_FLAGS=(--no-deps --no-build-isolation -e)
+
 echo "[INFO] follower 플러그인 설치: $AI_DIR/lerobot_robot_openarmx_follower_ros2"
-pip install -e "$AI_DIR/lerobot_robot_openarmx_follower_ros2"
+pip install "${PIP_FLAGS[@]}" "$AI_DIR/lerobot_robot_openarmx_follower_ros2"
 
 echo "[INFO] leader 플러그인 설치: $AI_DIR/lerobot_teleoperator_openarmx_leader_ros2"
-pip install -e "$AI_DIR/lerobot_teleoperator_openarmx_leader_ros2"
+pip install "${PIP_FLAGS[@]}" "$AI_DIR/lerobot_teleoperator_openarmx_leader_ros2"
 
 echo "[OK] 설치 완료. entry-point 확인:"
 python - <<'PY'
