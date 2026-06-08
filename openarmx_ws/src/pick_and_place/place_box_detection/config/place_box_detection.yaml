@@ -1,0 +1,52 @@
+place_box_detection_node:
+  ros__parameters:
+    body_frame: "openarmx_body_link0"
+    cloud_topic: "/camera/camera/depth/color/points"
+    tof_topic: "/tof/range"
+    period_s: 0.5
+    # Run the cloud stage even without a TOF reading (TOF driver not wired yet).
+    require_tof: false
+
+    tof:
+      min_range_m: 0.30
+      max_range_m: 1.20
+      stale_timeout_s: 0.5
+      # Added to raw range to get wall body-x. Cross-validated vs D435 (Δ<1mm):
+      # raw TOF range already equals wall body-x, so the effective offset is 0.
+      mount_x_offset_m: 0.0
+
+    desk:
+      # Measured desk top ~0.726 m; band brackets it generously.
+      z_min: 0.55
+      z_max: 0.85
+      ransac_thresh: 0.006
+      axis_eps_deg: 12.0
+      min_inliers: 2000
+
+    wall:
+      height_margin: 0.03          # start 3 cm above the desk top
+      use_depth_gate: true
+      depth_gate_tol: 0.10         # +/- 10 cm around the TOF standoff (x)
+      ransac_thresh: 0.008
+      axis_eps_deg: 15.0
+      max_nz: 0.20                 # |normal_z| < 0.20 -> upright
+      min_width: 0.10
+      # Visible height only (camera tilt clips the top); do NOT set to 0.20.
+      min_visible_height: 0.06
+      min_inliers: 800
+      require_faces_robot: true
+
+    color:
+      min_saturation: 0.25
+      min_value: 0.15
+      min_confidence: 0.40
+
+tof_serial_driver:
+  ros__parameters:
+    port: "/dev/ttyACM0"
+    baud: 115200
+    frame_id: "tof_link"
+    field_of_view: 0.44
+    min_range: 0.03
+    max_range: 2.0
+    pattern: "Range is\\s+(\\d+)\\s*mm"

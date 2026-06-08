@@ -1,0 +1,14 @@
+# Build / install / colcon
+build/
+install/
+log/
+
+# Captured experiment artifacts (point clouds, review images) — not source
+data/
+
+# OMC state
+.omc/
+
+# Python
+__pycache__/
+*.pyc
