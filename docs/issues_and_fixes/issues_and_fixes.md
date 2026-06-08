@@ -7,6 +7,25 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-09 (KST) — ptp UI 종료 시 왼팔(can3) 토크 안 풀리고 stiff 잔존 — 하드웨어 on_deactivate 중도 SIGKILL
+
+### 증상
+`openarmx_ptp_ui` 종료 시 양팔이 HOME 복귀 후, **왼팔만** 토크가 안 풀린 채(여전히 stiff/제어됨) UI 가 종료된다. 종료 직후 프로세스 스캔 결과 ros2_control_node·controller_manager·UI 등 ROS(Robot Operating System) 프로세스는 **전부 죽어 있음** → 살아있는 노드가 잡는 게 아니라 **MIT 모드 모터가 마지막 명령을 유지**.
+
+### 원인
+MIT 모드 모터는 하드웨어 [v10_simple_hardware.cpp on_deactivate():462-477](../../openarmx_ws/src/openarmx_ros2/openarmx_hardware/src/v10_simple_hardware.cpp#L462-L477) 의 `disable_all()`(CAN(Controller Area Network) 버스별·팔별 토크 해제)이 실행돼야 풀린다. ros2_control 이 좌(can3)·우(can2) 두 하드웨어 인스턴스를 **순차 비활성화**하는데, 기존 `closeEvent` 가 하드웨어 포함 **모든 launch 그룹을 동시에 SIGINT → 1.0s 공유 grace → 0.2s 후 SIGKILL** 했다. `ros2 launch` 는 ros2_control_node 가 양팔 deactivate 를 끝내야 종료되는데 1.2s 로는 부족 → 두 번째로 disable 되는 **왼팔이 `disable_all` 도중 SIGKILL 로 잘려** 토크 잔존(좌우 비대칭).
+
+### 수정
+[main_window.py closeEvent](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/main_window.py) 를 **2단계 모터-안전 teardown** 으로 변경.
+- park HOME 후 픽 서버/브릿지(팔 구동 주체) 먼저 정리.
+- **Phase 1**: 비-하드웨어 그룹(컨트롤러·카메라·검출·백엔드·RViz·중력·ee·tof·place_box) 동시 SIGINT → 1.0s → quick SIGKILL.
+- **Phase 2**: 하드웨어(`hw_sil`/`hw_hw`)만 SIGINT 후 **launch 가 스스로 종료할 때까지 최대 6초 대기**(`ros2 launch` 종료 ≈ on_deactivate/disable_all 양팔 완료), 초과 시에만 SIGKILL. 대기 중 `processEvents` 로 GUI(Graphical User Interface) 비차단 + "모터 토크 해제 대기" 상태표시.
+
+### 재발 방지
+실로봇 MIT 종료는 컨트롤러/하드웨어 동시 SIGKILL 금지 — 하드웨어 노드가 **양 CAN(Controller Area Network) 인스턴스 disable 을 끝내고 자발 종료**할 때까지 대기해야 한다(순차 비활성화라 마지막 팔이 잘리기 쉬움). 종료 후 stiff 잔존 시 살아있는 노드부터 의심하지 말 것(프로세스 0개여도 모터가 last cmd 유지). 라이브 HIL(Hardware-In-the-Loop) 검증 필요. [[jtc_tremor_rootcause]] [[gravity_comp_hil_result]] [[motor_speed_limit_mit_mode]]
+
+---
+
 ## 2026-06-07 16:00 (KST) — JTC(Joint Trajectory Controller) 명령 시 "덜덜덜" 떨림 근본원인 진단 (진단만)
 
 ### 증상
@@ -39,6 +58,9 @@ ptp 묶음(`pick_and_place/ptp/`)에 모션 백엔드(C++ `openarmx_ptp_box_alig
 - **구동·ROS**: [ptp_ros_bridge.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/ptp_ros_bridge.py) — 백그라운드 스레드 rclpy `ActionClient`(`/openarmx/ptp_align_to_boxes`), `send_goal_async`/`cancel_goal_async`, feedback(phase/progress)·result→Qt 시그널.
 - 엔트리/launch/문서: [scripts/ptp_pnp_ui.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/scripts/ptp_pnp_ui.py), [launch/ptp_pnp_ui.launch.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/launch/ptp_pnp_ui.launch.py), [README.md](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/README.md).
 - launch 7행 명령은 scenario_ui `launch_manager_tab.py`/`pick_and_place_tab.py` 의 검증된 것 그대로. RViz config 는 src 직접 로드(realpath walk-up, 설치/share 금지 규칙). ptp 는 MoveIt-free 라 move_group 불필요.
+
+### 후속 — 운용값 config 외부화 (load-only, 사용자 요청)
+사용자: "모든 변수는 config 폴더에 저장". 결정: 범위=운용값만, 방향=로드 전용. 신규 [config/ptp_pnp_ui.yaml](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/config/ptp_pnp_ui.yaml)(action_name / status_timer_ms / detect_ws_setup / hw_can{right,left,mode,can_fd} / goal_defaults{z,roll,pitch,yaw,arms}) + 로더 [app_config.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/app_config.py)(DEFAULTS per-key 병합). `main_window` 는 `build_presets(cfg)` 로 hw_hw CAN·det 경로를 config 에서 조립하고 골 기본값·타이머·액션명도 config 반영. config 경로 src 우선(편집 즉시 반영)→share. launch 의 nodes/procs/sweep 내부 식별자는 운용값 아니라 코드 유지. CMakeLists `install(DIRECTORY … config)`, package.xml `python3-yaml`. 검증: 재빌드 OK(config share 심링크), 오프스크린에서 골/CAN/검출경로/액션명/타이머 전부 config 반영 + 누락키 DEFAULTS 보완 확인.
 
 ### 빌드/발견 gotcha (수정)
 `colcon build --symlink-install` + `install(PROGRAMS …)` 환경에서 colcon 이 설치본을 src 스크립트로 **심볼릭 링크**한다. 이때 src `scripts/ptp_pnp_ui.py` 에 **실행비트(+x)가 없으면** 링크가 비실행 파일을 가리켜 `ros2 pkg executables` 가 빈 결과 → `ros2 run`/`ros2 launch` 가 엔트리를 못 찾음(`install(PROGRAMS)` 의 0755 권한이 심링크로 무력화됨). 비교: scenario_ui `scenario_ui.py` 는 `-rwxrwxr-x`. → `chmod +x src/…/scripts/ptp_pnp_ui.py` 로 해결(재빌드 불필요, 심링크가 src 직참조).

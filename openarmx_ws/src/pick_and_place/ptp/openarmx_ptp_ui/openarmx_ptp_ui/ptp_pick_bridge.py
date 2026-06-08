@@ -17,6 +17,8 @@ from PyQt5.QtCore import QObject, pyqtSignal
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import (QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy,
+                       QoSHistoryPolicy)
 from std_srvs.srv import Trigger
 from std_msgs.msg import String, Bool
 
@@ -39,6 +41,13 @@ class PtpPickBridge(QObject):
         self._node = Node("ptp_pick_ui_bridge")
         self._color_pub = self._node.create_publisher(String, "/pick_color", 10)
         self._dual_pub = self._node.create_publisher(Bool, "/allow_dual_arm", 10)
+        # 컨테이너 자동(거리 게이트+색 다수결) 활성 신호. container_pick_gate 노드가 수신해
+        # 활성일 때만 /pick_color 를 몬다(수동·타 색 자동과 충돌 방지). latched(늦게 떠도 수신).
+        latched = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.RELIABLE,
+                             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                             history=QoSHistoryPolicy.KEEP_LAST)
+        self._follow_pub = self._node.create_publisher(Bool, "/container_follow_active", latched)
+        self._follow_pub.publish(Bool(data=False))   # 기본 비활성(수동/타 발행자에 /pick_color 양보)
         self._pick, self._auto_on, self._auto_off = {}, {}, {}
         for s in SIDES:
             self._pick[s] = self._node.create_client(Trigger, f"/ptp_pick_{s}/pick_once")
@@ -47,6 +56,10 @@ class PtpPickBridge(QObject):
             self._node.create_subscription(
                 String, f"/ptp_pick_{s}/status",
                 lambda m, sd=s: self.sig_status.emit(f"[{sd}] {m.data}"), 10)
+        # 컨테이너 게이트 상태 -> UI 표시(수신만)
+        self._node.create_subscription(
+            String, "/container_pick_gate/status",
+            lambda m: self.sig_status.emit(f"[컨테이너] {m.data}"), 10)
         self._exec = SingleThreadedExecutor()
         self._exec.add_node(self._node)
         self._thread = threading.Thread(target=self._exec.spin, daemon=True)
@@ -60,6 +73,11 @@ class PtpPickBridge(QObject):
         """양팔 동시 구동 허용 토글. True=동시, False=단일팔(충돌방지 뮤텍스)."""
         self._dual_pub.publish(Bool(data=bool(allow)))
         self.sig_status.emit("양팔 동시 구동 허용 ON" if allow else "단일팔(충돌방지) 모드")
+
+    def _set_follow(self, active: bool):
+        """컨테이너 자동(게이트가 /pick_color 구동) 활성/비활성 신호. 활성이면 UI/브릿지는
+        /pick_color 를 발행하지 않고(게이트에 양보), 비활성이면 게이트가 양보한다."""
+        self._follow_pub.publish(Bool(data=bool(active)))
 
     def _call_side(self, clients, side: str = "both") -> int:
         sides = SIDES if side == "both" else (side,)
@@ -76,6 +94,7 @@ class PtpPickBridge(QObject):
         return self._call_side(clients, "both")
 
     def manual_pick(self, kor: str, side: str = "both"):
+        self._set_follow(False)        # 수동: 게이트 양보, UI 가 색 지정
         self.set_color(kor)
         n = self._call_side(self._pick, side)
         sn = {"left": "좌", "right": "우", "both": "양"}.get(side, side)
@@ -83,11 +102,22 @@ class PtpPickBridge(QObject):
             f"수동 명령 전송 [{sn}팔] ({n}서버)" if n else "픽 서버 없음 — 서버를 띄우세요")
 
     def auto_start(self, kor: str):
+        """색 지정 자동(전체/특정 색) — UI 가 /pick_color 를 직접 지정. 게이트는 양보."""
+        self._set_follow(False)
         self.set_color(kor)
         n = self._call_both(self._auto_on)
         self.sig_status.emit(f"자동 시작 ({n}서버)" if n else "픽 서버 없음")
 
+    def auto_start_container(self):
+        """컨테이너 색 추종 자동 — UI 는 /pick_color 미발행. container_pick_gate 가 거리 게이트+
+        색 다수결로 /pick_color 를 몬다. 여기선 활성 신호만 켜고 resident 자동 루프를 켠다."""
+        self._set_follow(True)
+        n = self._call_both(self._auto_on)
+        self.sig_status.emit(
+            f"컨테이너 자동 시작 ({n}서버) — 게이트가 거리·색 판단" if n else "픽 서버 없음")
+
     def auto_stop(self):
+        self._set_follow(False)        # 게이트 비활성
         n = self._call_both(self._auto_off)
         self.sig_status.emit(f"자동 정지 ({n}서버)")
 

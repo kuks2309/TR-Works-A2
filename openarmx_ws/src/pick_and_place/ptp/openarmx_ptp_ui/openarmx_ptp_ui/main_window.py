@@ -374,6 +374,9 @@ class PtpPnpMainWindow(QMainWindow):
             # 좌/우 resident 는 검출 트리거 없이 최신 박스만 소비 → 전환 지연 제거.
             # 반드시 resident 보다 먼저 띄워 첫 픽부터 최신 박스가 있게 한다.
             f"python3 {_R}/experiments/box_detect_loop.py & "
+            # 컨테이너 자동: 거리 게이트 + 색 시간-다수결로 /pick_color 를 몬다. gated=true 라
+            # '컨테이너 자동' 활성(/container_follow_active=True)일 때만 발행(수동/타 색 자동과 무충돌).
+            f"python3 {_R}/experiments/container_pick_gate.py --ros-args -p gated:=true & "
             # NOTE: ptp_pick_resident.py reads SIDE only from the "--side=right"
             # (equals) form; "--side right" (space) is NOT recognised and both
             # residents would default to left → the right arm is never driven and
@@ -546,6 +549,7 @@ class PtpPnpMainWindow(QMainWindow):
         self._pick_srv_proc.stop()
         self._kill_pattern("ptp_pick_resident")
         self._kill_pattern("box_detect_loop")
+        self._kill_pattern("container_pick_gate")
         self.lblPnpStatus.setText("픽 서버 상태: 정지")
 
     def _auto_start_rviz(self) -> None:
@@ -727,20 +731,16 @@ class PtpPnpMainWindow(QMainWindow):
                 "blue": "파랑", "orange": "주황"}
 
     def _auto_start(self) -> None:
-        """Auto-start picking. For "컨테이너 색" the pick colour follows the live
-        detected container colour (from /place_box/info); otherwise use the combo
-        selection as-is."""
+        """Auto-start picking. "컨테이너 색" 은 색 판단을 UI 가 하지 않는다 — container_pick_gate
+        노드가 거리 게이트 + 색 시간-다수결로 /pick_color 를 몬다(UI 는 표시만). 그 외(전체/특정
+        색)는 UI 가 색을 직접 지정한다."""
         sel = self.comboColorAuto.currentText()
         if sel == "컨테이너 색":
-            kor = self._ENG2KOR.get((self._container_color or "").lower())
-            if kor is None:
-                self._set_status(
-                    "컨테이너 색 미검출/불명 — 큰박스(place) 검출을 띄우고 컨테이너를 비춘 뒤 시작하세요")
-                self.lblPnpStatus.setText("픽 서버 상태: 컨테이너 색 없음 — 자동 시작 보류")
-                return
+            # 일회성 색 게이트 제거 — 게이트 노드가 컨테이너 유무(거리)·색(다수결)을 연속 판단.
+            # 비웠다 다시 공급돼도 게이트가 거리로 인식·지속. UI 는 발행자가 아니다.
             self.lblPnpStatus.setText(
-                f"픽 서버 상태: 컨테이너 색 = {self._container_color} → {kor} 자동 픽")
-            self._pick_bridge.auto_start(kor)
+                "픽 서버 상태: 컨테이너 자동 — 게이트가 거리·색 판단 (~/status 표시)")
+            self._pick_bridge.auto_start_container()
         else:
             self._pick_bridge.auto_start(sel)
 
@@ -771,8 +771,13 @@ class PtpPnpMainWindow(QMainWindow):
                 holder.layout().addWidget(QLabel(f"3D 뷰 사용 불가: {e}"))
 
     def _on_cloud(self, xyz, rgba) -> None:
+        # Cloud는 카메라 optical 프레임(+X 오른쪽, +Y 아래, +Z 깊이). GL 뷰는 화면
+        # 수직축이 +Y를 위로 매핑해 좌측 영상과 상하가 뒤집혀 보임 → 표시용으로만
+        # Y 부호 반전(데이터 사본, 실좌표는 미변경)하여 영상과 위/아래를 일치시킨다.
+        pos = xyz.copy()
+        pos[:, 1] = -pos[:, 1]
         for scatter in self._cloud_scatters:
-            scatter.setData(pos=xyz, color=rgba, size=2.0)
+            scatter.setData(pos=pos, color=rgba, size=2.0)
 
     @staticmethod
     def _render_to_label(label, bgr) -> None:
@@ -1145,32 +1150,22 @@ class PtpPnpMainWindow(QMainWindow):
             self._bridge.park_arms_home(tick=QApplication.processEvents)
         except Exception:
             pass
-        # Fast shutdown. Sequential proc.stop() waited up to several seconds PER
-        # process (SIGINT grace), so closing with a few launches up felt slow.
-        # Instead: stop the ROS bridge, SIGINT every group we started AT ONCE
-        # (one shared grace), then quick-SIGKILL any straggler.
+        # ---- Motor-safe, two-phase teardown ---------------------------------
+        # MIT-mode motors HOLD their last commanded position until the hardware's
+        # on_deactivate() runs disable_all() (per CAN bus / per arm). ros2_control
+        # deactivates the two arm components SEQUENTIALLY, so if ros2_control_node
+        # is SIGKILLed before it finishes, the arm disabled SECOND (left, can3)
+        # stays energised/stiff after the UI exits. Therefore: tear down the
+        # non-hardware groups quickly, then give the HARDWARE node a generous
+        # graceful window to disable BOTH arms before any SIGKILL.
         self._timer.stop()
         self._mj_timer.stop()
         self._pipe_tab.shutdown()
         self._bridge.shutdown()
-        running = [p for p in self._procs.values() if p.running]
-        for p in running:
-            try:
-                os.killpg(os.getpgid(p.pid), signal.SIGINT)
-            except (ProcessLookupError, PermissionError):
-                pass
-        if running:
-            time.sleep(1.0)                    # single shared grace, not per-proc
-        for p in self._procs.values():
-            p.stop(sigint_timeout=0.2)         # quick SIGKILL of any straggler
-        # Reap orphans (pgrep returns immediately when nothing matches).
-        for key in list(self._started_keys):
-            for pat in (self._presets[key].get("procs", [])
-                        + self._presets[key].get("sweep", [])):
-                self._kill_pattern(pat)
-        # Pick servers + pick bridge live OUTSIDE self._procs, so the loops above
-        # miss them — tear them down explicitly, else /ptp_pick_{left,right}
-        # survive the UI. (gravity / ee_leader ARE in self._procs and handled.)
+
+        # Pick servers/bridge command the arms (and may hold an arm on its
+        # arm_position_controller) — stop them FIRST so nothing drives the arm
+        # while the hardware is being deactivated. They live outside self._procs.
         try:
             self._pick_bridge.shutdown()
         except Exception:
@@ -1178,4 +1173,47 @@ class PtpPnpMainWindow(QMainWindow):
         self._pick_srv_proc.stop()
         self._kill_pattern("ptp_pick_resident")
         self._kill_pattern("box_detect_loop")
+        self._kill_pattern("container_pick_gate")
+
+        hw_keys = ("hw_sil", "hw_hw")
+        # Phase 1 — non-hardware groups (controllers/cam/det/backend/rviz/gravity/
+        # ee/tof/place_box): SIGINT all at once, one shared grace, quick SIGKILL.
+        others = [p for k, p in self._procs.items()
+                  if k not in hw_keys and p.running]
+        for p in others:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGINT)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if others:
+            time.sleep(1.0)                    # single shared grace, not per-proc
+        for p in others:
+            p.stop(sigint_timeout=0.2)         # quick SIGKILL of any straggler
+
+        # Phase 2 — hardware (ros2_control_node): SIGINT, then WAIT for the launch
+        # to exit on its own so on_deactivate()/disable_all() releases BOTH arms
+        # (left included). `ros2 launch` only exits after ros2_control_node has
+        # finished deactivating, so waiting for the parent ≈ waiting for the motor
+        # disable to complete. SIGKILL only if it overruns the (generous) window.
+        hw_procs = [self._procs[k] for k in hw_keys
+                    if k in self._procs and self._procs[k].running]
+        for p in hw_procs:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGINT)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if hw_procs:
+            self._set_status("종료 전 모터 토크 해제(양팔 disable) 대기 중…")
+            deadline = time.monotonic() + 6.0
+            while time.monotonic() < deadline and any(p.running for p in hw_procs):
+                QApplication.processEvents()
+                time.sleep(0.05)
+        for p in hw_procs:
+            p.stop(sigint_timeout=0.2)         # SIGKILL only if it overran
+
+        # Reap orphans (pgrep returns immediately when nothing matches).
+        for key in list(self._started_keys):
+            for pat in (self._presets[key].get("procs", [])
+                        + self._presets[key].get("sweep", [])):
+                self._kill_pattern(pat)
         event.accept()
