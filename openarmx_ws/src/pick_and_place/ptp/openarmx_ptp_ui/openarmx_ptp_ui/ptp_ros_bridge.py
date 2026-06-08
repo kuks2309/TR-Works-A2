@@ -65,6 +65,7 @@ CAM_ANNOTATED_TOPIC = "/yolov8_node/image_annotated"          # YOLO overlay (on
 CLOUD_TOPIC = "/camera/camera/depth/color/points"            # 3D point cloud (XYZRGB)
 TOF_TOPIC = "/tof/range"                                      # laser distance (VL53L0X)
 DETECTIONS_TOPIC = "/yolov8_node/detections"                 # YOLO detections JSON (box colours)
+PLACE_BOX_TOPIC = "/place_box/info"                          # big (place) box: wall pose + colour JSON
 
 
 class PtpRosBridge(QObject):
@@ -80,6 +81,7 @@ class PtpRosBridge(QObject):
     # Detection tab sensor/detect readout.
     sig_tof = pyqtSignal(float)        # laser distance, metres
     sig_box_colors = pyqtSignal(object)  # list[str] of detected box colours
+    sig_place_box = pyqtSignal(dict)   # big (place) box: ok/centroid/front/colour
 
     def __init__(self, action_name: str = PTP_ACTION, parent=None) -> None:
         super().__init__(parent)
@@ -275,6 +277,8 @@ class PtpRosBridge(QObject):
                 Range, TOF_TOPIC, self._on_tof, self._img_qos)
             self._img_subs[DETECTIONS_TOPIC] = self._node.create_subscription(
                 String, DETECTIONS_TOPIC, self._on_detections, self._img_qos)
+            self._img_subs[PLACE_BOX_TOPIC] = self._node.create_subscription(
+                String, PLACE_BOX_TOPIC, self._on_place_box, self._img_qos)
         else:
             for sub in self._img_subs.values():
                 try:
@@ -352,6 +356,26 @@ class PtpRosBridge(QObject):
                 counts[colour] += 1
         self.sig_box_colors.emit(
             [f"{c}×{n}" if n > 1 else c for c, n in counts.items()])
+
+    def _on_place_box(self, msg: String) -> None:
+        import json
+        try:
+            d = json.loads(msg.data)
+        except Exception:
+            return
+        wall = d.get("wall", {}) or {}
+        colour = d.get("color", {}) or {}
+        tof = d.get("tof", {}) or {}
+        self.sig_place_box.emit({
+            "ok": bool(wall.get("ok")),
+            "centroid": wall.get("centroid"),          # [x, y, z] (body) or None
+            "front_distance": wall.get("front_distance"),
+            "width": wall.get("width"),
+            "color_name": colour.get("name", ""),
+            "color_conf": colour.get("confidence", 0.0),
+            "tof_present": bool(tof.get("present")),
+            "tof_distance": tof.get("distance_m"),
+        })
 
     def _decode(self, msg: Image):
         """Decode a sensor_msgs/Image to a contiguous BGR uint8 ndarray.

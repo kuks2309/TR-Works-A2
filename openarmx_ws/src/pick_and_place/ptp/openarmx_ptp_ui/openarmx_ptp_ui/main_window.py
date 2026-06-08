@@ -26,6 +26,7 @@ import math
 import os
 import re
 import signal
+import socket
 import subprocess
 import time
 from datetime import datetime
@@ -61,16 +62,23 @@ _BTN_RED_QSS = (
 )
 
 
-# Motion Jog HOME / INIT joint targets (deg) — joint_data.{HOME,INIT}_POSITION_DEG.
+# Motion Jog HOME / INIT joint targets (deg).
+# HOME = all 0°. INIT = the RAISED hand-guide pose registered 2026-06-07 for
+# table-collision avoidance (SSOT: experiments/ptp_pick_seq_v2 INIT_DEG). The old
+# [±50,0,0,100,0,0,±50] INIT sat too low and the gripper clipped boxes. Mirror
+# rule: j4 (elbow) equal, j1/2/3/5/6/7 sign-flipped (s=-1,-1,-1,+1,-1,-1,-1).
 _HOME_DEG = {f"openarmx_{s}_joint{i}": 0.0
              for s in ("left", "right") for i in range(1, 8)}
-_INIT_DEG = dict(_HOME_DEG)
-_INIT_DEG.update({
-    "openarmx_left_joint1": 50.0, "openarmx_left_joint4": 100.0,
-    "openarmx_left_joint7": 50.0,
-    "openarmx_right_joint1": -50.0, "openarmx_right_joint4": 100.0,
-    "openarmx_right_joint7": -50.0,
-})
+_INIT_DEG = {
+    "openarmx_left_joint1": 42.8, "openarmx_left_joint2": -46.3,
+    "openarmx_left_joint3": 14.3, "openarmx_left_joint4": 106.5,
+    "openarmx_left_joint5": -41.7, "openarmx_left_joint6": 23.4,
+    "openarmx_left_joint7": 42.1,
+    "openarmx_right_joint1": -42.8, "openarmx_right_joint2": 46.3,
+    "openarmx_right_joint3": -14.3, "openarmx_right_joint4": 106.5,
+    "openarmx_right_joint5": 41.7, "openarmx_right_joint6": -23.4,
+    "openarmx_right_joint7": -42.1,
+}
 
 
 def _pkg_config(filename: str) -> str:
@@ -249,6 +257,17 @@ def build_presets(cfg: dict) -> dict:
             "sweep": ["ee_leader_marker_bimanual"],
             "widgets": ("btnEeStart", "btnEeStop", "lblEe"),
         },
+        # 큰 박스(place) 검출: cloud+TOF → 벽(place box) pose/색 → /place_box/info.
+        # Pick and Place 탭 센서 그룹의 "큰 박스 위치/유무/색" 소스.
+        "place_box": {
+            "cmd": ["ros2", "launch", "place_box_detection",
+                    "place_box_detection.launch.py"],
+            "confirm": False,
+            "nodes": ["/place_box_detection_node"],
+            "procs": ["place_box_detection.launch", "place_box_detection_node"],
+            "sweep": ["place_box_detection_node"],
+            "widgets": ("btnPlaceBoxStart", "btnPlaceBoxStop", "lblPlaceBox"),
+        },
     }
 
 
@@ -296,9 +315,61 @@ class PtpPnpMainWindow(QMainWindow):
         # Detection-tab sensor/detect readout (laser distance + box colours).
         self._bridge.sig_tof.connect(self._on_tof)
         self._bridge.sig_box_colors.connect(self._on_box_colors)
+        self._bridge.sig_place_box.connect(self._on_place_box)
         # Motion Jog tab: live Cartesian (TF) + Joint (/joint_states) readout.
         self._build_velocity_tab()   # _vel_spin must exist before HOME/INIT
         self._build_motion_jog()
+
+        # ---- Pick&Place 탭: 수동/자동 픽 (상주 픽 서버 ptp_pick_left/right 호출) ----
+        from openarmx_ptp_ui.ptp_pick_bridge import PtpPickBridge
+        self._pick_bridge = PtpPickBridge(self)
+        self._pick_bridge.sig_status.connect(
+            lambda s: self.lblPnpStatus.setText(f"픽 서버 상태: {s}"))
+        self.btnPickOnce.clicked.connect(
+            lambda: self._pick_bridge.manual_pick(
+                self.comboColorPnp.currentText(),
+                {"좌": "left", "우": "right"}.get(
+                    self.comboSidePnp.currentText(), "both")))
+        # 자동 전용 색 선택 (수동과 분리). 기본 "전체(모든 색)" = 색 무관.
+        from PyQt5.QtWidgets import QCheckBox, QComboBox, QLabel, QHBoxLayout, QWidget
+        _gl = self.grpAuto.layout()
+        self.comboColorAuto = QComboBox(self.grpAuto)
+        self.comboColorAuto.addItems(["전체(모든 색)", "빨강", "노랑", "녹색", "파랑", "주황"])
+        self.comboColorAuto.setToolTip("자동 picking 대상 색 (전체=색 무관하게 잡음)")
+        _arow = QWidget(self.grpAuto)
+        _al = QHBoxLayout(_arow)
+        _al.setContentsMargins(0, 0, 0, 0)
+        _al.addWidget(QLabel("색:"))
+        _al.addWidget(self.comboColorAuto)
+        if _gl is not None:
+            _gl.addWidget(_arow)
+        # 자동 시작은 '자동 전용' 콤보 사용(수동 comboColorPnp 와 분리)
+        self.btnAutoStart.clicked.connect(
+            lambda: self._pick_bridge.auto_start(self.comboColorAuto.currentText()))
+        self.btnAutoStop.clicked.connect(self._pick_bridge.auto_stop)
+        # 양팔 동시 구동 허용 체크박스 — 기본 OFF=단일팔(충돌방지 뮤텍스), ON=동시 허용
+        self.chkDualArm = QCheckBox("양팔 동시 구동 허용", self.grpAuto)
+        self.chkDualArm.setToolTip("체크: 양팔 동시 동작 / 해제: 한 번에 한 팔만(충돌방지)")
+        if _gl is not None:
+            _gl.addWidget(self.chkDualArm)
+        self.chkDualArm.toggled.connect(self._pick_bridge.set_dual_arm)
+        # 픽 서버(좌/우 상주) — 한 버튼으로 동시 기동/정지 (ManagedProcess)
+        _R = "/home/openarmx/TR-Works/kkw/China"
+        self._pick_srv_proc = ManagedProcess("ptp_ui_pickservers")
+        self._pick_srv_cmd = ["bash", "-c",
+            "source /opt/ros/humble/setup.bash && "
+            f"source {_R}/openarmx_ws/install/setup.bash && "
+            f"source {_R}/3d_detect_ws/install/setup.bash && "
+            # NOTE: ptp_pick_resident.py reads SIDE only from the "--side=right"
+            # (equals) form; "--side right" (space) is NOT recognised and both
+            # residents would default to left → the right arm is never driven and
+            # sits at the old INIT. Use the equals form.
+            f"python3 {_R}/experiments/ptp_pick_resident.py --side=left "
+            "--ros-args -r __node:=ptp_pick_left & "
+            f"python3 {_R}/experiments/ptp_pick_resident.py --side=right "
+            "--ros-args -r __node:=ptp_pick_right & wait"]
+        self.btnSrvStart.clicked.connect(self._start_pick_servers)
+        self.btnSrvStop.clicked.connect(self._stop_pick_servers)
 
         # periodic status refresh (this-tab / external / stopped).
         self._timer = QTimer(self)
@@ -311,6 +382,9 @@ class PtpPnpMainWindow(QMainWindow):
         # Pipe Health tab (dynamic table, built in code) — appended last.
         self._pipe_tab = PipeHealthTab(self._bridge, parent=self)
         self.tabs.addTab(self._pipe_tab, "Pipe Health")
+
+        # Network tab (remote-control settings) — empty placeholder, appended last.
+        self._build_network_tab()
 
         # Project rule: RViz must always spawn alongside the UI.
         if with_rviz:
@@ -444,6 +518,20 @@ class PtpPnpMainWindow(QMainWindow):
             self._kill_pattern(pat)
         self._set_status(f"Stopped: {self._label(key)}")
         self._refresh_status()
+
+    def _start_pick_servers(self) -> None:
+        if self._pick_srv_proc.running:
+            self.lblPnpStatus.setText("픽 서버 상태: 이미 실행 중")
+            return
+        ok = self._pick_srv_proc.start(self._pick_srv_cmd)
+        self.lblPnpStatus.setText(
+            "픽 서버 상태: 좌/우 기동 중… (모델 로드 ~4s, 로봇 스택 필요)" if ok
+            else "픽 서버 상태: 기동 실패")
+
+    def _stop_pick_servers(self) -> None:
+        self._pick_srv_proc.stop()
+        self._kill_pattern("ptp_pick_resident")
+        self.lblPnpStatus.setText("픽 서버 상태: 정지")
 
     def _auto_start_rviz(self) -> None:
         preset = self._presets["rviz"]
@@ -590,10 +678,27 @@ class PtpPnpMainWindow(QMainWindow):
             self._set_status(f"검출요청 실패: {e}")
 
     def _on_tof(self, meters: float) -> None:
-        self.lblLaser.setText(f"{meters:.3f} m" if meters > 0 else "--- m")
+        txt = f"{meters:.3f} m" if meters > 0 else "--- m"
+        self.lblLaser.setText(txt)        # Detection tab
+        self.lblTofPnp.setText(txt)       # Pick and Place tab
 
     def _on_box_colors(self, colors) -> None:
         self.lblBoxColors.setText(", ".join(colors) if colors else "---")
+
+    def _on_place_box(self, d: dict) -> None:
+        # Big (place) box from /place_box/info: position (centroid) + presence/colour.
+        c = d.get("centroid")
+        if d.get("ok") and c and len(c) == 3:
+            fd = d.get("front_distance")
+            self.lblBigBox.setText(
+                f"x={c[0]:+.3f} y={c[1]:+.3f} z={c[2]:+.3f} m"
+                + (f" (front {fd:.3f})" if isinstance(fd, (int, float)) else ""))
+            col = d.get("color_name") or "?"
+            conf = d.get("color_conf") or 0.0
+            self.lblBigBoxColor.setText(f"있음 · {col} ({conf:.2f})")
+        else:
+            self.lblBigBox.setText("미검출")
+            self.lblBigBoxColor.setText("없음")
 
     def _setup_cloud_view(self) -> None:
         """Embed pyqtgraph OpenGL point-cloud views in BOTH right panes (Detection
@@ -662,6 +767,17 @@ class PtpPnpMainWindow(QMainWindow):
         self._btn_init.clicked.connect(self._go_init)
         btn_row.addWidget(self._btn_home)
         btn_row.addWidget(self._btn_init)
+        # 자유구동(핸드 가이드) — 좌/우 토글. ON: 홈 이동 후 kp=0(중력보상 유지)로 손 이동. OFF: 복원+홈.
+        self._btn_fd = {}
+        for _side, _lab in (("left", "좌 자유구동"), ("right", "우 자유구동")):
+            _b = QPushButton(_lab)
+            _b.setCheckable(True)
+            _b.setMinimumHeight(34)
+            _b.setStyleSheet("QPushButton:checked{background:#ffb300;font-weight:bold;}")
+            _b.setToolTip("ON: 홈 이동 후 kp=0(중력보상 유지)로 손으로 이동 / OFF: 위치제어 복원+홈복귀")
+            _b.toggled.connect(lambda on, s=_side: self._toggle_freedrive(s, on))
+            self._btn_fd[_side] = _b
+            btn_row.addWidget(_b)
         btn_row.addStretch()
         root.addLayout(btn_row)
 
@@ -704,6 +820,22 @@ class PtpPnpMainWindow(QMainWindow):
         self._mj_timer = QTimer(self)
         self._mj_timer.timeout.connect(self._refresh_cartesian)
         self._mj_timer.start(500)
+
+    def _toggle_freedrive(self, side: str, on: bool) -> None:
+        """자유구동(핸드 가이드) 토글. ON: 홈 이동 -> --enable(kp=0, 중력보상 유지)로 손 이동 가능.
+        OFF: --restore(JTC 활성=현재자세 캡처 -> kp 복원 -> 홈). arm_freedrive.py 가 안전순서 보장."""
+        _R = "/home/openarmx/TR-Works/kkw/China"
+        base = ("source /opt/ros/humble/setup.bash && "
+                f"source {_R}/openarmx_ws/install/setup.bash")
+        fd = f"python3 {_R}/experiments/arm_freedrive.py --side {side}"
+        if on:
+            cmd = f"{base} && {fd} --home && {fd} --enable"
+            self._set_status(f"{side} 자유구동 ON — 홈 이동 후 손으로 이동 가능 (중력보상 유지)")
+        else:
+            cmd = f"{base} && {fd} --restore"
+            self._set_status(f"{side} 자유구동 OFF — 위치제어 복원 + 홈 복귀")
+        subprocess.Popen(["bash", "-c", cmd], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
 
     def _on_joint_readout(self, positions: dict) -> None:
         for arm in ("left", "right"):
@@ -769,6 +901,106 @@ class PtpPnpMainWindow(QMainWindow):
         root.addStretch(1)
         self.tabs.addTab(tab, "Joint Velocity")
 
+    # ------------------------------------------------------------- Network tab
+    def _build_network_tab(self) -> None:
+        """New '네트워크' (Network) tab for remote-control settings — read-only
+        check of ROS env (DOMAIN_ID, localhost-only, RMW) and host IP addresses.
+        Display layer only; '새로고침' re-reads the live values."""
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+
+        # --- ROS 환경 (원격 제어 식별) ---
+        grp_ros = QGroupBox("ROS 네트워크 (원격 제어 식별)")
+        g = QGridLayout(grp_ros)
+        self._net_lbl = {}
+        rows = [
+            ("ros_domain", "ROS_DOMAIN_ID"),
+            ("localhost", "ROS_LOCALHOST_ONLY"),
+            ("rmw", "RMW_IMPLEMENTATION"),
+        ]
+        for r, (key, cap) in enumerate(rows):
+            g.addWidget(QLabel(f"<b>{cap}</b>"), r, 0)
+            v = QLabel("---")
+            v.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._net_lbl[key] = v
+            g.addWidget(v, r, 1)
+        g.setColumnStretch(1, 1)
+        root.addWidget(grp_ros)
+
+        # --- 호스트 IP (설정 확인) ---
+        grp_ip = QGroupBox("호스트 IP (네트워크 설정 확인)")
+        gi = QGridLayout(grp_ip)
+        gi.addWidget(QLabel("<b>호스트명</b>"), 0, 0)
+        self._net_lbl["host"] = QLabel("---")
+        self._net_lbl["host"].setTextInteractionFlags(Qt.TextSelectableByMouse)
+        gi.addWidget(self._net_lbl["host"], 0, 1)
+        gi.addWidget(QLabel("<b>기본(외부) IP</b>"), 1, 0)
+        self._net_lbl["primary_ip"] = QLabel("---")
+        self._net_lbl["primary_ip"].setTextInteractionFlags(Qt.TextSelectableByMouse)
+        gi.addWidget(self._net_lbl["primary_ip"], 1, 1)
+        gi.addWidget(QLabel("<b>인터페이스</b>"), 2, 0, Qt.AlignTop)
+        self._net_lbl["ifaces"] = QLabel("---")
+        self._net_lbl["ifaces"].setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._net_lbl["ifaces"].setWordWrap(True)
+        gi.addWidget(self._net_lbl["ifaces"], 2, 1)
+        gi.setColumnStretch(1, 1)
+        root.addWidget(grp_ip)
+
+        btn = QPushButton("새로고침")
+        btn.clicked.connect(self._refresh_network)
+        row = QHBoxLayout()
+        row.addWidget(btn)
+        row.addStretch()
+        root.addLayout(row)
+        root.addStretch(1)
+
+        self.tabs.addTab(tab, "네트워크")
+        self._refresh_network()
+
+    def _refresh_network(self) -> None:
+        """Re-read live ROS env + host IP and update the network-tab labels."""
+        # ROS env
+        self._net_lbl["ros_domain"].setText(
+            os.environ.get("ROS_DOMAIN_ID", "0 (기본)"))
+        lho = os.environ.get("ROS_LOCALHOST_ONLY", "0")
+        self._net_lbl["localhost"].setText(
+            f"{lho} ({'로컬 전용' if lho == '1' else '네트워크 개방'})")
+        self._net_lbl["rmw"].setText(
+            os.environ.get("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp (기본)"))
+
+        # Host name
+        try:
+            self._net_lbl["host"].setText(socket.gethostname())
+        except OSError:
+            self._net_lbl["host"].setText("(조회 실패)")
+
+        # Primary outbound IP (no packet actually sent)
+        primary = "(없음)"
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(("8.8.8.8", 80))
+                primary = s.getsockname()[0]
+            finally:
+                s.close()
+        except OSError:
+            pass
+        self._net_lbl["primary_ip"].setText(primary)
+
+        # Per-interface IPv4 via `ip -4 -o addr` (read-only query)
+        ifaces = []
+        try:
+            out = subprocess.run(
+                ["ip", "-4", "-o", "addr", "show"],
+                capture_output=True, text=True, timeout=2).stdout
+            for ln in out.splitlines():
+                parts = ln.split()
+                if len(parts) >= 4 and parts[2] == "inet":
+                    ifaces.append(f"{parts[1]} : {parts[3]}")
+        except (OSError, subprocess.SubprocessError):
+            pass
+        self._net_lbl["ifaces"].setText("\n".join(ifaces) if ifaces else "(조회 실패)")
+
     def _apply_vel_all(self) -> None:
         v = self._spn_vel_all.value()
         for s in self._vel_spin.values():
@@ -801,6 +1033,7 @@ class PtpPnpMainWindow(QMainWindow):
             "ctrl": "컨트롤러 스폰", "cam": "D435 카메라",
             "det": "원격검출+인지", "backend": "ptp 정렬 백엔드", "rviz": "RViz",
             "tof": "TOF 수신", "gravity": "중력보상", "ee_markers": "ee_leader 마커",
+            "place_box": "큰박스(place) 검출",
         }.get(key, key)
 
     def _append_log(self, text: str) -> None:
@@ -891,4 +1124,13 @@ class PtpPnpMainWindow(QMainWindow):
             for pat in (self._presets[key].get("procs", [])
                         + self._presets[key].get("sweep", [])):
                 self._kill_pattern(pat)
+        # Pick servers + pick bridge live OUTSIDE self._procs, so the loops above
+        # miss them — tear them down explicitly, else /ptp_pick_{left,right}
+        # survive the UI. (gravity / ee_leader ARE in self._procs and handled.)
+        try:
+            self._pick_bridge.shutdown()
+        except Exception:
+            pass
+        self._pick_srv_proc.stop()
+        self._kill_pattern("ptp_pick_resident")
         event.accept()

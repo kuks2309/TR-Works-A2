@@ -65,11 +65,26 @@ APPROACH_POINT_DEG = ([-2.27, -17.79, 36.32, 110.37, -8.36, 41.27, 14.14] if SID
 DROP_POINT_DEG = ([-43.05, 1.29, 34.39, 54.43, -23.62, 22.91, 1.40] if SIDE == "left"
                   else [43.05, -1.29, -34.39, 54.43, 23.62, -22.91, -1.40])
 
-APPROACH_Z = 0.80
-DESCEND_Z = 0.75
-GRIP_80 = 0.0088
+APPROACH_Z = 0.88          # 접근/상승 높이. 박스 상단(책상0.72+9cm=0.81) 위로 진입해야 박스 안 침.
+                           # (0.80은 박스top 아래라 진입 중 그리퍼가 박스를 치고 밀었음 -> 파지실패)
+DESCEND_Z = 0.75           # 런타임에 박스 z 추종으로 덮어씀(아래)
+# 하강 z 박스 z 추종: descend_z = max(DESCEND_FLOOR, box_z - GRASP_DEPTH).
+# 고정 0.75면 z 낮은 박스(예 0.739)에서 그리퍼가 박스 위에서 닫혀 빈손 -> 박스 z 따라 내림.
+# DESCEND_FLOOR(0.72)로 테이블 충돌 보호("0.72 이상이면 진행").
+# 검출 z 는 박스 상부에 가깝다(9cm 박스: 책상 0.72 + 높이 0.09 -> 윗면 0.81, 검출 z≈0.79).
+# descend = box_z - GRASP_DEPTH. 0.03 이면 윗면보다 ~5cm 박혀 9cm 박스를 쳐서 빈손 ->
+# 깊이를 줄여 박스 상부를 잡는다(0.01 -> descend≈0.78, 윗면 ~3cm 아래).
+GRASP_DEPTH = 0.01         # 검출 z(상부) 아래로 내리는 깊이 (작을수록 위에서 잡음)
+DESCEND_FLOOR = 0.72       # 하강 하한 (이 밑으로는 안 내림)
+GRIP_80 = 0.0             # 파지 닫기 명령=완전닫힘. 빈손 바닥 실측 좌0.0007/우0.0018(우 오프셋 높음),
+                          # 박스 물면 박스 폭에서 멈춤 -> 빈손 바닥과 벌어져 위치로 파지 판별.
 GRIP_OPEN = 0.044          # 완전 열림 (이동 중 핸드 열림 유지)
-GRIP_EFFORT = 50.0
+GRIP_EFFORT = 1.0         # 무른 박스 으깸 방지(50->10->5->1). 최소 힘으로 자연폭 파지(검출 쉬움)
+                          # 주의: 너무 약하면 운반 중 미끄러질 수 있음
+# 파지검증 임계(GRIP_80=0.0 이므로 임계=margin, 절대값). 빈손바닥 좌0.0007/우0.0018 위,
+# 얇은 파지(으깬 우박스 0.0040) 아래. 단일 임계로 양팔 성립.
+GRIP_DETECT_MARGIN = 0.003   # 절대 임계 폴백(캘리브 실패 시). 평소엔 self.grip_thr 사용
+GRIP_CALIB_MARGIN = 0.001    # 기동 캘리브: 임계 = 측정한 빈손바닥 + 이 값(상대 판정). 드리프트 흡수
 
 IK_EPS, IK_MAX_ITER, IK_DT, IK_DAMP, IK_RESTARTS = 1e-4, 1000, 0.1, 1e-6, 20
 RAMP_RATE_DPS = 60.0     # forward position 최대 관절속도 [deg/s] (튜닝: --rate)
@@ -148,6 +163,7 @@ class PickV2(Node):
                              history=QoSHistoryPolicy.KEEP_LAST)
         self.urdf = None
         self.box = None
+        self.boxes = []
         self.state = {}
         self.create_subscription(String, "/robot_description", self._urdf_cb, latched)
         self.create_subscription(PoseArray, "/detected_boxes", self._box_cb, latched)
@@ -167,8 +183,15 @@ class PickV2(Node):
 
     def _box_cb(self, m):
         if m.poses:
-            p = m.poses[0].position
-            self.box = (p.x, p.y, p.z)
+            self.boxes = [(p.position.x, p.position.y, p.position.z) for p in m.poses]
+            # 측면 분담(중앙 Y=0 기준): 오른쪽(Y<0)=오른팔, 왼쪽(Y>0)=왼팔.
+            # 그 중 X 최소(가까울수록 쉽게 잡음 — far 신전/droop 회피)를 선택.
+            if SIDE == "right":
+                cand = [b for b in self.boxes if b[1] < 0.0]
+            else:
+                cand = [b for b in self.boxes if b[1] > 0.0]
+            # 엄격 분리: 자기 측면에 박스 없으면 안 잡고 대기(None). 반대편으로 절대 안 넘어감.
+            self.box = min(cand, key=lambda b: b[0]) if cand else None
 
     def _js_cb(self, m):
         for n, p in zip(m.name, m.position):
@@ -466,8 +489,10 @@ class PickV2(Node):
         for _ in range(15):
             rclpy.spin_once(self, timeout_sec=0.05)
         g = self.state.get(f"openarmx_{SIDE}_finger_joint1", 0.0)
-        gripped = g > 0.0095
-        print(f"   [{label}] finger={g:.4f}m (cmd 0.0088) -> "
+        # 임계: 기동 캘리브로 측정한 빈손 바닥 기준(self.grip_thr). 없으면 절대값 폴백.
+        thr = getattr(self, "grip_thr", GRIP_80 + GRIP_DETECT_MARGIN)
+        gripped = g > thr
+        print(f"   [{label}] finger={g:.4f}m (임계 {thr:.4f}) -> "
               f"{'파지 OK(박스 물림)' if gripped else '미파지 의심(빈 손)'}")
         return gripped
 
@@ -554,11 +579,22 @@ def main():
 
     if node.box is None:
         print("ERROR: /detected_boxes 없음 (검출 먼저)"); return 1
+    if len(node.boxes) > 1:
+        side_lbl = "오른쪽 Y<0" if SIDE == "right" else "왼쪽 Y>0"
+        srt = sorted(node.boxes, key=lambda b: b[0])
+        print(f"[0] 박스 {len(node.boxes)}개 검출 -> {SIDE}팔 담당({side_lbl}) 중 X 최소(가까운) 선택")
+        for b in srt:
+            same = (b[1] < 0.0) if SIDE == "right" else (b[1] > 0.0)
+            mark = " <= 선택" if b == node.box else ("" if same else "  (반대측면 제외)")
+            print(f"     X={b[0]:.3f} Y={b[1]:+.3f} Z={b[2]:.3f}{mark}")
     rbx, rby, rbz = node.box
     ox, oy, oz = load_grasp_offset()
     bx, by, bz = rbx + ox, rby + oy, rbz + oz
     print(f"[1] 검출 박스 ({rbx:.4f}, {rby:.4f}, {rbz:.4f}) "
           f"+ 오프셋({ox:+.3f},{oy:+.3f},{oz:+.3f}) -> 타깃 ({bx:.4f}, {by:.4f}, {bz:.4f})")
+    DESCEND_Z = max(DESCEND_FLOOR, bz - GRASP_DEPTH)   # 박스 z 추종(하한 0.72)
+    print(f"   [하강 z] 박스 z {bz:.3f} -> descend_z {DESCEND_Z:.3f} "
+          f"(max({DESCEND_FLOOR}, z-{GRASP_DEPTH}))")
 
     # IK: 수직하향(자세구속) 우선 -> 도달불가(>5mm)면 자세자유 폴백. 현재 자세 시드.
     # 기본 = 자유(position-only). --vdown 시에만 수직하향 우선(+자유 폴백).
@@ -593,6 +629,11 @@ def main():
         # 기본: grasp 기준자세 모델(박스 위치 -> 목표 자세). 접근=하강=기준자세.
         qa, ea, ta, qd, ed, td, opt_info, grasp_ok = node.solve_pick_refmodel(bx, by, seed)
         ma = md = "refmodel"
+        if not grasp_ok:
+            # 기준자세 6D IK 도달불가(자세 경직) -> 자유 IK 후보탐색 폴백
+            print(f"   [기준자세 도달불가: {opt_info}] -> 자유 IK 폴백")
+            qa, ea, ta, qd, ed, td, opt_info, grasp_ok = node.solve_pick_optimal(bx, by, seed, N_CAND)
+            ma = md = "free(폴백)"
     if not grasp_ok:
         print(f"   [IK 자세결정] {opt_info}")
         print("!! SAFE-ABORT: 유효 파지자세 없음/모델 없음/도달불가 — 실행 안 함. 박스 위치·모델 확인.")

@@ -36,8 +36,14 @@
             <widget class="QLabel" name="imgCamPnp">
              <property name="minimumSize">
               <size>
-               <width>320</width>
-               <height>300</height>
+               <width>240</width>
+               <height>180</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>240</height>
               </size>
              </property>
              <property name="alignment">
@@ -56,8 +62,14 @@
             <widget class="QWidget" name="cloudHolderPnp" native="true">
              <property name="minimumSize">
               <size>
-               <width>320</width>
-               <height>300</height>
+               <width>240</width>
+               <height>180</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>240</height>
               </size>
              </property>
              <property name="styleSheet">
@@ -80,6 +92,231 @@
             </widget>
            </item>
           </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="grpSensorsPnp">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>56</height>
+           </size>
+          </property>
+          <property name="title">
+           <string>센서 (place box 검출 · TOF)</string>
+          </property>
+          <layout class="QHBoxLayout" name="sensorsPnpLayout">
+           <property name="topMargin">
+            <number>2</number>
+           </property>
+           <property name="bottomMargin">
+            <number>2</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="lblTofPnpCap">
+             <property name="text">
+              <string>&lt;b&gt;TOF 거리:&lt;/b&gt;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblTofPnp">
+             <property name="text">
+              <string>--- m</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblBigBoxCap">
+             <property name="text">
+              <string>&lt;b&gt;큰 박스:&lt;/b&gt;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblBigBox">
+             <property name="text">
+              <string>미검출</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblBigBoxColorCap">
+             <property name="text">
+              <string>&lt;b&gt;유무·색:&lt;/b&gt;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblBigBoxColor">
+             <property name="text">
+              <string>---</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="sensorsPnpSpacer">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="pnpCtrlLayout">
+          <item>
+           <widget class="QGroupBox" name="grpManual">
+            <property name="title">
+             <string>수동 (Manual) — 정해진 색에서 가장 가까운 박스 1개</string>
+            </property>
+            <layout class="QHBoxLayout" name="manualLayout">
+             <item>
+              <widget class="QLabel" name="lblColorPnp">
+               <property name="text">
+                <string>색:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="comboColorPnp">
+               <item>
+                <property name="text">
+                 <string>빨강</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>노랑</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>녹색</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>파랑</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>주황</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>자동(전체)</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="lblSidePnp">
+               <property name="text">
+                <string>팔:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="comboSidePnp">
+               <item>
+                <property name="text">
+                 <string>양팔</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>좌</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>우</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnPickOnce">
+               <property name="text">
+                <string>수동 실행 (1회)</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="grpAuto">
+            <property name="title">
+             <string>자동 (Auto) — 연속 picking</string>
+            </property>
+            <layout class="QHBoxLayout" name="autoLayout">
+             <item>
+              <widget class="QPushButton" name="btnAutoStart">
+               <property name="text">
+                <string>자동 시작</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnAutoStop">
+               <property name="text">
+                <string>자동 정지</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="grpSrv">
+            <property name="title">
+             <string>픽 서버 (좌/우 상주 — 한 버튼)</string>
+            </property>
+            <layout class="QHBoxLayout" name="srvLayout">
+             <item>
+              <widget class="QPushButton" name="btnSrvStart">
+               <property name="text">
+                <string>서버 시작</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnSrvStop">
+               <property name="text">
+                <string>서버 정지</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QLabel" name="lblPnpStatus">
+          <property name="text">
+           <string>픽 서버 상태: (미연결)</string>
+          </property>
+          <property name="styleSheet">
+           <string>color:#9CDCFE; padding:4px;</string>
+          </property>
          </widget>
         </item>
        </layout>
@@ -802,6 +1039,35 @@
            </item>
            <item row="10" column="3">
             <widget class="QLabel" name="lblEe">
+             <property name="text">
+              <string>● Stopped</string>
+             </property>
+            </widget>
+           </item>
+           <!-- 큰 박스(place) 검출 -->
+           <item row="11" column="0">
+            <widget class="QLabel" name="namePlaceBox">
+             <property name="text">
+              <string>검출 · 큰 박스(place) — cloud+TOF → /place_box/info (Pick탭 센서)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="11" column="1">
+            <widget class="QPushButton" name="btnPlaceBoxStart">
+             <property name="text">
+              <string>Start</string>
+             </property>
+            </widget>
+           </item>
+           <item row="11" column="2">
+            <widget class="QPushButton" name="btnPlaceBoxStop">
+             <property name="text">
+              <string>Stop</string>
+             </property>
+            </widget>
+           </item>
+           <item row="11" column="3">
+            <widget class="QLabel" name="lblPlaceBox">
              <property name="text">
               <string>● Stopped</string>
              </property>
