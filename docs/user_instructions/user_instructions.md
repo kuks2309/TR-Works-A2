@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-06-09 01:06 KST — ptp pick&place UI launch 명령을 a2_pick_and_place alias 로 등록
+
+> "cd ~/TR-Works/kkw/China/openarmx_ws && source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch openarmx_ptp_ui ptp_pnp_ui.launch.py\n를 a2_pick_and_place로 alias에 넣어주세요"
+
+> "커밋 푸쉬 기록"
+
+---
+
 ## 2026-06-08 21:33 KST — place_box_detection 신규(TOF→ROI→D435 수직벽→HSV 5색) + TOF·D435 교차검증 + HSV 임계 실측 재튜닝 + Auto 컨테이너색 매칭 픽
 
 > "폴더 /home/openarmx/TR-Works/kkw/China/openarmx_ws/src/pick_and_place/place_box_detection 에 place 할 박스를 검출하려고 합니다. 박스는 50cm이상 앞에 위치해져 있으며 큰 수직 벽면을 검출하면 됩도니다. 72cm 책상 위에 놓여져 있습니다.\n1) 72cm 바닥면 겸출 ->2) 72cm에서 높이 약 20cm  이상의 수직면 검출\n먼저 cloud data를  검토해주세요"
