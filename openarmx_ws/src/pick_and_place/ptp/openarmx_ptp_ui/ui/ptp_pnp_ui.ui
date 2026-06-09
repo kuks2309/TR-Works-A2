@@ -35,7 +35,7 @@
            <item>
             <widget class="QLabel" name="imgCamPnp">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+              <sizepolicy hsizetype="Ignored" vsizetype="Fixed">
                <horstretch>1</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
@@ -43,6 +43,12 @@
              <property name="minimumSize">
               <size>
                <width>320</width>
+               <height>300</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
                <height>300</height>
               </size>
              </property>
@@ -61,7 +67,7 @@
            <item>
             <widget class="QWidget" name="cloudHolderPnp" native="true">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+              <sizepolicy hsizetype="Ignored" vsizetype="Fixed">
                <horstretch>1</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
@@ -69,6 +75,12 @@
              <property name="minimumSize">
               <size>
                <width>320</width>
+               <height>300</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
                <height>300</height>
               </size>
              </property>
@@ -319,6 +331,19 @@
           </property>
          </widget>
         </item>
+        <item>
+         <spacer name="pnpBottomSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
        </layout>
       </widget>
       <!-- ================= TAB 2: Detection (영상 + AlignToBoxes) ================= -->
@@ -367,7 +392,7 @@
            <item>
             <widget class="QLabel" name="imgCam">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+              <sizepolicy hsizetype="Ignored" vsizetype="Fixed">
                <horstretch>1</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
@@ -375,6 +400,12 @@
              <property name="minimumSize">
               <size>
                <width>320</width>
+               <height>300</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
                <height>300</height>
               </size>
              </property>
@@ -393,7 +424,7 @@
            <item>
             <widget class="QWidget" name="cloudHolder" native="true">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+              <sizepolicy hsizetype="Ignored" vsizetype="Fixed">
                <horstretch>1</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
@@ -401,6 +432,12 @@
              <property name="minimumSize">
               <size>
                <width>320</width>
+               <height>300</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
                <height>300</height>
               </size>
              </property>
