@@ -296,29 +296,6 @@
             </layout>
            </widget>
           </item>
-          <item>
-           <widget class="QGroupBox" name="grpSrv">
-            <property name="title">
-             <string>픽 서버 (좌/우 상주 — 한 버튼)</string>
-            </property>
-            <layout class="QHBoxLayout" name="srvLayout">
-             <item>
-              <widget class="QPushButton" name="btnSrvStart">
-               <property name="text">
-                <string>서버 시작</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QPushButton" name="btnSrvStop">
-               <property name="text">
-                <string>서버 정지</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </item>
          </layout>
         </item>
         <item>

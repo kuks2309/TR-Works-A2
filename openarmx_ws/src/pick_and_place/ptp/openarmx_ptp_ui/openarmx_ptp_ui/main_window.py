@@ -376,9 +376,7 @@ class PtpPnpMainWindow(QMainWindow):
             f"source {_R}/openarmx_ws/install/setup.bash && "
             f"source {_R}/3d_detect_ws/install/setup.bash && "
             "exec ros2 launch openarmx_ptp_pick ptp_pick_servers.launch.py"]
-        self.btnSrvStart.clicked.connect(self._start_pick_servers)
-        self.btnSrvStop.clicked.connect(self._stop_pick_servers)
-        # Launch 탭의 '픽 서버' row 도 동일 메서드(같은 _pick_srv_proc 재사용) — 이중 실행 방지.
+        # 픽 서버 기동/정지는 Launch 탭 '픽 서버' row 에서만 (Pick&Place 탭 중복 버튼 제거).
         self.btnPickSrvLaunchStart.clicked.connect(self._start_pick_servers)
         self.btnPickSrvLaunchStop.clicked.connect(self._stop_pick_servers)
 
@@ -413,12 +411,10 @@ class PtpPnpMainWindow(QMainWindow):
             getattr(self, stop).setStyleSheet(_BTN_RED_QSS)
         self.btnRun.setStyleSheet(_BTN_GREEN_QSS)
         self.btnCancel.setStyleSheet(_BTN_RED_QSS)
-        # 픽 서버 버튼(Launch 탭 row + Pick&Place 탭)은 preset 이 아니라 _pick_srv_proc 재사용 →
+        # 픽 서버 버튼(Launch 탭 row)은 preset 이 아니라 _pick_srv_proc 재사용 →
         # 여기서 직접 초록/빨강 스타일 적용(다른 행과 동일하게).
         self.btnPickSrvLaunchStart.setStyleSheet(_BTN_GREEN_QSS)
         self.btnPickSrvLaunchStop.setStyleSheet(_BTN_RED_QSS)
-        self.btnSrvStart.setStyleSheet(_BTN_GREEN_QSS)
-        self.btnSrvStop.setStyleSheet(_BTN_RED_QSS)
 
     def _wire_launch_rows(self) -> None:
         for key, p in self._presets.items():
