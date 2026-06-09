@@ -367,32 +367,20 @@ class PtpPnpMainWindow(QMainWindow):
         # 픽 서버(좌/우 상주) — 한 버튼으로 동시 기동/정지 (ManagedProcess)
         _R = "/home/openarmx/TR-Works/kkw/China"
         self._pick_srv_proc = ManagedProcess("ptp_ui_pickservers")
+        # ptp pick&place 정본은 정식 패키지 openarmx_ptp_pick(experiments/ 에서 승격).
+        # box_detect_loop 가 yolov8_detection_msgs(별도 워크스페이스 3d_detect_ws)를 쓰므로 먼저
+        # source 한 뒤, 패키지 launch 로 검출루프+컨테이너게이트+좌/우 resident 를 한 번에 띄운다.
+        # (구 experiments/ 절대경로 bash 그룹 대체 — 노드명 ptp_pick_left/right 는 launch 가 remap.)
         self._pick_srv_cmd = ["bash", "-c",
             "source /opt/ros/humble/setup.bash && "
             f"source {_R}/openarmx_ws/install/setup.bash && "
             f"source {_R}/3d_detect_ws/install/setup.bash && "
-            # bash '&' 는 '&&' 보다 우선순위가 낮다 → 중괄호 그룹으로 묶지 않으면
-            # 위 source 가 첫 잡(box_detect_loop)에만 적용되고 좌/우 resident 는
-            # sourcing 없이 떠서 yolov8_detection_msgs import 실패로 죽는다.
-            # { ...; } 로 세 잡을 묶어 동일 sourced 환경을 모두 상속하게 한다.
-            "{ "
-            # 검출/이동 분리: box_detect_loop 가 /detected_boxes 를 연속 갱신하고,
-            # 좌/우 resident 는 검출 트리거 없이 최신 박스만 소비 → 전환 지연 제거.
-            # 반드시 resident 보다 먼저 띄워 첫 픽부터 최신 박스가 있게 한다.
-            f"python3 {_R}/experiments/box_detect_loop.py & "
-            # 컨테이너 자동: 거리 게이트 + 색 시간-다수결로 /pick_color 를 몬다. gated=true 라
-            # '컨테이너 자동' 활성(/container_follow_active=True)일 때만 발행(수동/타 색 자동과 무충돌).
-            f"python3 {_R}/experiments/container_pick_gate.py --ros-args -p gated:=true & "
-            # NOTE: ptp_pick_resident.py reads SIDE only from the "--side=right"
-            # (equals) form; "--side right" (space) is NOT recognised and both
-            # residents would default to left → the right arm is never driven and
-            # sits at the old INIT. Use the equals form.
-            f"python3 {_R}/experiments/ptp_pick_resident.py --side=left "
-            "--ros-args -r __node:=ptp_pick_left & "
-            f"python3 {_R}/experiments/ptp_pick_resident.py --side=right "
-            "--ros-args -r __node:=ptp_pick_right & wait; }"]
+            "exec ros2 launch openarmx_ptp_pick ptp_pick_servers.launch.py"]
         self.btnSrvStart.clicked.connect(self._start_pick_servers)
         self.btnSrvStop.clicked.connect(self._stop_pick_servers)
+        # Launch 탭의 '픽 서버' row 도 동일 메서드(같은 _pick_srv_proc 재사용) — 이중 실행 방지.
+        self.btnPickSrvLaunchStart.clicked.connect(self._start_pick_servers)
+        self.btnPickSrvLaunchStop.clicked.connect(self._stop_pick_servers)
 
         # periodic status refresh (this-tab / external / stopped).
         self._timer = QTimer(self)
@@ -604,6 +592,17 @@ class PtpPnpMainWindow(QMainWindow):
             else:
                 lbl.setText("● Stopped")
                 lbl.setStyleSheet("color:gray;")
+        # 픽 서버(좌/우 상주, Launch 탭 row) 상태 — _pick_srv_proc(이 UI)/노드그래프(외부) 감지.
+        if self._pick_srv_proc.running:
+            self.lblPickSrvLaunch.setText("● Running (this UI)")
+            self.lblPickSrvLaunch.setStyleSheet("color:#080; font-weight:bold;")
+        elif any(("ptp_pick_left" in n or "ptp_pick_right" in n)
+                 for n in self._node_cache):
+            self.lblPickSrvLaunch.setText("● Running (external)")
+            self.lblPickSrvLaunch.setStyleSheet("color:#d80;")
+        else:
+            self.lblPickSrvLaunch.setText("● Stopped")
+            self.lblPickSrvLaunch.setStyleSheet("color:gray;")
 
     # ------------------------------------------------------------- action ctrl
     def _run(self) -> None:

@@ -893,7 +893,7 @@
            <item row="6" column="0">
             <widget class="QLabel" name="nameBackend">
              <property name="text">
-              <string>모션 · ptp 정렬 백엔드 (Pinocchio IK → JTC, 액션 서버)</string>
+              <string>모션 · Hover 정렬 (C++ AlignToBoxes, 디버그 — 정본 픽은 아래 '픽 서버')</string>
              </property>
             </widget>
            </item>
@@ -1056,6 +1056,40 @@
            </item>
            <item row="11" column="3">
             <widget class="QLabel" name="lblPlaceBox">
+             <property name="text">
+              <string>● Stopped</string>
+             </property>
+            </widget>
+           </item>
+           <item row="12" column="0">
+            <widget class="QLabel" name="namePickSrv">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="text">
+              <string>픽 · 좌/우 상주 픽 서버 — 검출루프+게이트+resident (openarmx_ptp_pick 정본, L0+L1+검출 필요)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="12" column="1">
+            <widget class="QPushButton" name="btnPickSrvLaunchStart">
+             <property name="text">
+              <string>Start</string>
+             </property>
+            </widget>
+           </item>
+           <item row="12" column="2">
+            <widget class="QPushButton" name="btnPickSrvLaunchStop">
+             <property name="text">
+              <string>Stop</string>
+             </property>
+            </widget>
+           </item>
+           <item row="12" column="3">
+            <widget class="QLabel" name="lblPickSrvLaunch">
              <property name="text">
               <string>● Stopped</string>
              </property>
