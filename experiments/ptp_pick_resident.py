@@ -22,6 +22,9 @@ import time
 import numpy as np
 
 ARM_LOCK_PATH = "/tmp/openarmx_arm_pick.lock"   # 양팔 동시 동작 금지(프로세스 간 뮤텍스)
+MOTION_PATH_LOCK = "/tmp/openarmx_motion_path.lock"  # C++ Hover(EX) vs resident pick(SH) 경로 상호배타
+AUTO_BOX_MAX_AGE = 5.0   # /detected_boxes 가 이보다 오래되면 stale(검출 끊김) — 픽 안 함
+AUTO_FAULT_LIMIT = 5     # auto 에서 연속 '고장' 이 횟수면 자동정지(무한 busy-retry 방지)
 
 def _pop_side(argv):
     """--side=X / --side X 둘 다 처리 -> (side, --side 인자 제거된 나머지)."""
@@ -42,10 +45,16 @@ sys.argv = [_rest[0], f"--side={_side}"] + _rest[1:]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rclpy  # noqa: E402
-from rclpy.action import ActionClient  # noqa: E402
+from rclpy.qos import (QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy,  # noqa: E402
+                       QoSHistoryPolicy)
 from std_srvs.srv import Trigger  # noqa: E402
 from std_msgs.msg import String, Bool  # noqa: E402
 import ptp_pick_seq_v2_left as core  # noqa: E402
+
+# [기술부채] /pick_color·~/status 공용 latched QoS — 늦게 뜨거나 재시작한 노드도 마지막 값 즉시 수신.
+LATCHED = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.RELIABLE,
+                     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                     history=QoSHistoryPolicy.KEEP_LAST)
 
 ALL_COLORS = ["mini-box-red", "mini-box-yellow", "mini-box-green",
               "mini-box-blue", "mini-box-orange"]   # box_perception 5색 (mini-box-seg 제외)
@@ -98,28 +107,32 @@ def run_pick(node, run=True):
 
     FPOS, JTC = core.FPOS, core.JTC
     # 이동 중엔 그리퍼를 닫아(좁게) 스냅 방지, 박스 바로 위(접근점)에서 열고 하강(top-down)
-    node.gripper(core.GRIP_80, "닫고 이동", block=False, settle_after=0.3)
-    node.do_switch([FPOS], [JTC])
-    node.forward_ramp(mid, "중간자세")
-    node.forward_ramp(appr, "접근")
+    node.gripper(core.GRIP_80, "닫고 이동", block=False, settle_after=0.15)
+    if not node.do_switch([FPOS], [JTC]):   # [기술부채] 전환 실패 시 비활성 컨트롤러 발행(무동작) 방지
+        return {"ok": False, "gripped": False, "info": "switch_fail(중간/접근: JTC→FPOS)"}
+    c = node.forward_ramp(mid, "중간자세", settle=False)   # 접근으로 통과(무정지)
+    node.forward_ramp(appr, "접근", seed=c)               # 직전 cmd 이어받기 → seam 불연속 제거
     node.gripper(core.GRIP_OPEN, "파지위치-열기")
-    node.do_switch([JTC], [FPOS])
+    if not node.do_switch([JTC], [FPOS]):
+        return {"ok": False, "gripped": False, "info": "switch_fail(하강: FPOS→JTC)"}
     node.jtc_move(desc, "하강")
     node.gripper(core.GRIP_80, "파지", block=False, settle_after=core.GRASP_SETTLE)
-    node.do_switch([FPOS], [JTC])
+    if not node.do_switch([FPOS], [JTC]):
+        return {"ok": False, "gripped": False, "info": "switch_fail(상승: JTC→FPOS)"}
     node.forward_ramp(retr, "상승")
     gripped = node.grip_status("파지검증")
     # 컨테이너(드롭) 이동도 forward position (설계 확정: 상승/컨테이너 이동=forward).
     # 상승 직후 FPOS 가 활성이므로 그대로 두고 박스접근지점→드랍→복귀를 forward_ramp 로 이동.
     # 기존 goto_joint(JTC)은 호출마다 워밍업+0.85s 라 뒷절반이 느렸음 → 설계 일치 + 단축.
     if gripped:
-        node.forward_ramp(np.radians(core.APPROACH_POINT_DEG), "박스접근지점")
-        node.forward_ramp(np.radians(core.DROP_POINT_DEG), "박스드랍위치")
-        node.gripper(core.GRIP_OPEN, "drop", block=False, settle_after=0.3)
+        c = node.forward_ramp(np.radians(core.APPROACH_POINT_DEG), "박스접근지점", settle=False)  # 드랍으로 통과
+        node.forward_ramp(np.radians(core.DROP_POINT_DEG), "박스드랍위치", seed=c)  # 직전 cmd 이어받기 → 접근→드랍 한 번에 연속
+        node.gripper(core.GRIP_OPEN, "drop", block=False, settle_after=0.15)
         node.forward_ramp(np.radians(core.APPROACH_POINT_DEG), "박스접근지점(복귀)")
     # INIT 복귀만 JTC (설계대로). FPOS→JTC 전환 후 복귀.
-    node.gripper(core.GRIP_OPEN, "INIT 복귀-열기", block=False, settle_after=0.2)
-    node.do_switch([JTC], [FPOS])
+    node.gripper(core.GRIP_OPEN, "INIT 복귀-열기", block=False, settle_after=0.1)
+    if not node.do_switch([JTC], [FPOS]):
+        return {"ok": False, "gripped": bool(gripped), "info": "switch_fail(INIT: FPOS→JTC)"}
     node.goto_init()
     box = tuple(round(v, 4) for v in (rbx, rby, rbz))
     return {"ok": True, "gripped": bool(gripped), "box": box, "info": info}
@@ -141,23 +154,37 @@ class ResidentPick:
         self.node.build_model()
         self.node.declare_parameter("color", "mini-box-red")
         self._color_val = "mini-box-red"   # /pick_color 토픽으로 UI가 갱신
-        self.detect = ActionClient(self.node, _detect_action_type(), "/yolov8_node/detect")
-        self.status_pub = self.node.create_publisher(String, "~/status", 10)
-        self.node.create_subscription(String, "/pick_color", self._on_color, 10)
+        # [기술부채] config(pick_seq_config_{side}.yaml) approach_z 를 resident 경로에도 반영
+        # (이전엔 core.main() 에서만 읽혀 무시 → 모듈기본 0.88 사용). descend_z 는 런타임 박스추종이라 생략.
+        _az, _dz = core.load_zheights()
+        if _az is not None:
+            core.APPROACH_Z = _az
+        # [기술부채] ~/status latched(pub) → 늦게 붙은 UI 도 마지막 상태 즉시 수신.
+        self.status_pub = self.node.create_publisher(String, "~/status", LATCHED)
+        # [기술부채] /pick_color latched 구독 → 재시작 후에도 마지막 수동 색 즉시 수신(기본색 오발 방지).
+        self.node.create_subscription(String, "/pick_color", self._on_color, LATCHED)
         self.node.create_service(Trigger, "~/pick_once", self._srv_pick_once)
         self.node.create_service(Trigger, "~/auto_start", self._srv_auto_start)
         self.node.create_service(Trigger, "~/auto_stop", self._srv_auto_stop)
         # 양팔 동시동작 제어: 기본=단일팔(뮤텍스로 충돌방지). /allow_dual_arm True(UI 체크박스)면 동시 허용
         self._allow_dual = False
         self.node.create_subscription(Bool, "/allow_dual_arm", self._on_dual, 10)
-        self._lock_fd = open(ARM_LOCK_PATH, "w")
+        # 락 파일은 /tmp 쓰기 실패 시 '조용히 진행' 금지 — 모션 안전상 기동을 중단한다.
+        # (경로 상호배타: resident 는 모션 동안 SH 공유락, C++ execute 는 EX 배타락 — 별개 파일.)
+        try:
+            self._lock_fd = open(ARM_LOCK_PATH, "w")
+            self._path_fd = open(MOTION_PATH_LOCK, "w")
+        except OSError as e:
+            raise RuntimeError(f"락 파일 생성 실패({e}) — /tmp 쓰기 권한 확인") from e
         self._have_lock = False
+        self._have_path = False
         self._auto = False
         self._pick_req = False     # 콜백은 플래그만; 실제 흐름은 메인 루프(중첩 스핀 방지)
         self._busy = False
         self._ok = 0
         self._ng = 0
-        self._pending_box = None   # 검출 캐시: 대기 중 재검출 회피 -> 팔 전환 즉시
+        self._last_motion_end = None   # 마지막 모션 종료 시각(sense-plan-act 재검출 핸드셰이크)
+        self._fault_streak = 0         # auto 연속 고장 카운트(진전 watchdog)
         self._calibrate_grip()   # 빈손 바닥 측정 -> 상대 임계(self.node.grip_thr). 끝나면 INIT=열림
         self._pub_status(f"resident {core.SIDE} 준비 완료")
 
@@ -185,12 +212,24 @@ class ResidentPick:
             self._busy = True
             try:
                 self._do_one(self._color())
+            except Exception as e:                  # 한 픽의 예외가 resident 를 죽이지 않도록
+                import traceback
+                self._pub_status(f"pick 예외(생존): {e}")
+                traceback.print_exc()
             finally:
                 self._busy = False
         elif self._auto:
             self._busy = True
             try:
-                self._do_one(self._color())
+                # dual 모드는 양팔 독립 픽이라 sense-plan-act 재검출 핸드셰이크를 끔(직렬화 방지).
+                # 단일팔 모드만 freshness 강제(깨끗한 sense-plan-act). staleness 가드는 양쪽 다 적용.
+                r = self._do_one(self._color(), require_fresh=not self._allow_dual)
+                self._watch_auto(r)
+            except Exception as e:
+                import traceback
+                self._watch_auto({"ok": False, "info": "exception"})
+                self._pub_status(f"auto pick 예외(생존): {e}")
+                traceback.print_exc()
             finally:
                 self._busy = False
 
@@ -222,25 +261,27 @@ class ResidentPick:
                 pass
             self._have_lock = False
 
+    def _acquire_path_lock(self):
+        """경로 SH(공유) 락 비차단 획득. C++ Hover(EX) 진행 중이면 False(이번 틱 양보)."""
+        try:
+            fcntl.flock(self._path_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            self._have_path = True
+            return True
+        except (BlockingIOError, OSError):
+            return False
+
+    def _release_path_lock(self):
+        if self._have_path:
+            try:
+                fcntl.flock(self._path_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            self._have_path = False
+
     def _color(self):
         return self._color_val or "mini-box-red"
 
-    def _trigger_detect(self, color):
-        # 자동=5색 콤마 1회(루프 시 /detected_boxes 덮어써져 마지막 색만 남음).
-        prompt = ",".join(ALL_COLORS) if color == "auto" else color
-        if not self.detect.wait_for_server(timeout_sec=3.0):
-            return
-        goal = _detect_goal(prompt)
-        fut = self.detect.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self.node, fut, timeout_sec=20.0)
-        gh = fut.result()
-        if gh and gh.accepted:
-            rfut = gh.get_result_async()
-            rclpy.spin_until_future_complete(self.node, rfut, timeout_sec=20.0)
-        for _ in range(8):
-            rclpy.spin_once(self.node, timeout_sec=0.05)   # _box_cb 갱신
-
-    def _do_one(self, color):
+    def _do_one(self, color, require_fresh=False):
         # 검출/이동 분리: 검출은 box_detect_loop 노드가 연속 수행 -> 여기선 트리거 없이
         # 최신 /detected_boxes(=self.node.box) 만 소비한다. 최신 반영 위해 짧게 스핀.
         for _ in range(3):
@@ -249,10 +290,27 @@ class ResidentPick:
         if box is None:
             self._pub_status("no_box")
             return {"ok": False, "info": "no_box"}
+        # [3] staleness 가드: 검출이 끊겼는데(box_detect_loop 죽음 등) 과거 박스로 무한 픽 방지.
+        stamp = self.node.box_stamp
+        if stamp is not None:
+            age = (self.node.get_clock().now() - stamp).nanoseconds / 1e9
+            if age > AUTO_BOX_MAX_AGE:
+                self._pub_status(f"stale box ({age:.1f}s) — 검출 끊김?")
+                return {"ok": False, "info": "stale_box"}
+        # [3] sense-plan-act 핸드셰이크(auto): 직전 모션 이후의 '새' 검출이 와야 다음 픽.
+        if require_fresh and self._last_motion_end is not None and (
+                stamp is None or stamp <= self._last_motion_end):
+            self._pub_status("재검출 대기(모션 후 새 검출 전)")
+            return {"ok": False, "info": "await_fresh"}
         # 모션(run_pick)만 뮤텍스 — 타팔 모션 중이면 양보(다음 틱 즉시 재시도, 검출 트리거 없음).
         if not self._allow_dual and not self._acquire_arm_lock():
             self._pub_status("대기(타팔 동작중)")
             return {"ok": False, "info": "busy_other_arm"}
+        # 경로 상호배타(SH): C++ Hover(디버그)가 EX 락 보유 중이면 양보(컨트롤러 충돌 방지).
+        if not self._acquire_path_lock():
+            self._release_arm_lock()
+            self._pub_status("대기(Hover 디버그 동작중)")
+            return {"ok": False, "info": "busy_cpp_hover"}
         try:
             self.node.box = box                     # 잠금 시점 박스로 고정해 픽
             self._pub_status(f"picking {core.SIDE} box=({box[0]:.2f},{box[1]:+.2f})")
@@ -265,7 +323,23 @@ class ResidentPick:
                 self._pub_status(r["info"])
             return r
         finally:
+            self._release_path_lock()
             self._release_arm_lock()
+            self._last_motion_end = self.node.get_clock().now()  # 재검출 핸드셰이크 기준
+
+    def _watch_auto(self, r):
+        """auto 진전 감시: 연속 '고장'(도달불가/SAFE-ABORT/switch 실패/예외/stale) 시 auto 자동정지.
+        no_box/busy_*/await_fresh = 정상 대기(고장 아님) → streak 리셋."""
+        info = (r or {}).get("info", "")
+        faults = ("unreachable", "SAFE-ABORT", "switch_fail", "exception", "stale_box")
+        if any(k in info for k in faults):
+            self._fault_streak += 1
+            if self._fault_streak >= AUTO_FAULT_LIMIT:
+                self._auto = False
+                self._fault_streak = 0
+                self._pub_status(f"AUTO 자동정지: 연속 고장 {AUTO_FAULT_LIMIT}회 (마지막: {info})")
+        else:
+            self._fault_streak = 0
 
     def _srv_pick_once(self, req, resp):
         # 콜백은 플래그만(중첩 스핀 방지). 결과는 ~/status 토픽으로.
@@ -277,22 +351,11 @@ class ResidentPick:
         resp.success = True; resp.message = "auto on"; return resp
 
     def _srv_auto_stop(self, req, resp):
-        self._auto = False; self._pub_status(f"AUTO 중지 (성공 {self._ok}/빈손 {self._ng})")
-        resp.success = True; resp.message = "auto off"; return resp
-
-
-def _detect_action_type():
-    from yolov8_detection_msgs.action import DetectBox
-    return DetectBox
-
-
-def _detect_goal(prompt):
-    from yolov8_detection_msgs.action import DetectBox
-    g = DetectBox.Goal()
-    g.prompts = prompt
-    g.confidence = 0.5
-    g.publish_annotated = True
-    return g
+        # soft-stop: self._auto=False 만 세팅 → 현재 진행 중인 1픽은 끝까지 가고 다음 사이클부터 정지.
+        # (즉시정지=현재위치 hold 는 executor 분리 필요, 별도 트랙.)
+        self._auto = False; self._fault_streak = 0
+        self._pub_status(f"AUTO 정지 요청 — 현재 동작 완료 후 정지 (성공 {self._ok}/빈손 {self._ng})")
+        resp.success = True; resp.message = "auto off (current pick finishes)"; return resp
 
 
 def main():

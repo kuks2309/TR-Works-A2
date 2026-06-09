@@ -326,13 +326,8 @@ class PtpPnpMainWindow(QMainWindow):
         # ---- Pick&Place 탭: 수동/자동 픽 (상주 픽 서버 ptp_pick_left/right 호출) ----
         from openarmx_ptp_ui.ptp_pick_bridge import PtpPickBridge
         self._pick_bridge = PtpPickBridge(self)
-        self._pick_bridge.sig_status.connect(
-            lambda s: self.lblPnpStatus.setText(f"픽 서버 상태: {s}"))
-        self.btnPickOnce.clicked.connect(
-            lambda: self._pick_bridge.manual_pick(
-                self.comboColorPnp.currentText(),
-                {"좌": "left", "우": "right"}.get(
-                    self.comboSidePnp.currentText(), "both")))
+        self._pick_bridge.sig_status.connect(self._on_pick_status)
+        self.btnPickOnce.clicked.connect(self._manual_pick)
         # 자동 전용 색 선택 (수동과 분리). 기본 "전체(모든 색)" = 색 무관.
         from PyQt5.QtWidgets import QCheckBox, QComboBox, QLabel, QHBoxLayout, QWidget
         _gl = self.grpAuto.layout()
@@ -351,13 +346,24 @@ class PtpPnpMainWindow(QMainWindow):
         # 자동 시작은 '자동 전용' 콤보 사용(수동 comboColorPnp 와 분리).
         # "컨테이너 색" 선택 시 검출된 큰 박스 색을 픽 색으로 사용(_auto_start).
         self.btnAutoStart.clicked.connect(self._auto_start)
-        self.btnAutoStop.clicked.connect(self._pick_bridge.auto_stop)
+        self.btnAutoStop.clicked.connect(self._auto_stop)
         # 양팔 동시 구동 허용 체크박스 — 기본 OFF=단일팔(충돌방지 뮤텍스), ON=동시 허용
         self.chkDualArm = QCheckBox("양팔 동시 구동 허용", self.grpAuto)
         self.chkDualArm.setToolTip("체크: 양팔 동시 동작 / 해제: 한 번에 한 팔만(충돌방지)")
         if _gl is not None:
             _gl.addWidget(self.chkDualArm)
         self.chkDualArm.toggled.connect(self._pick_bridge.set_dual_arm)
+
+        # [동시구동 차단·SSOT] pick&place 정본 = resident 픽 경로(이 탭). AlignToBoxes(C++)
+        # 는 박스 위 hover 정렬만 하는 디버그 경로로 격하. 두 경로가 같은 controller_manager 를
+        # 교차 토글하면 충돌하므로 UI 에서 상호배타(한쪽 활성 시 다른쪽 버튼 비활성).
+        self._cpp_goal_active = False        # AlignToBoxes(hover) 골 진행 중
+        self._cpp_goal_t0 = 0.0              # hover 골 전송 시각(서버 사망 시 래치 타임아웃용)
+        self._resident_auto_active = False   # resident 자동 픽 진행 중
+        self.btnRun.setText("Hover 정렬 (디버그)")
+        self.btnRun.setToolTip(
+            "C++ AlignToBoxes — 박스 위 hover 정렬만(파지·놓기 없음), 디버그/테스트용.\n"
+            "실제 pick&place 는 이 탭의 수동/자동(상주 픽 서버)을 사용하세요.")
         # 픽 서버(좌/우 상주) — 한 버튼으로 동시 기동/정지 (ManagedProcess)
         _R = "/home/openarmx/TR-Works/kkw/China"
         self._pick_srv_proc = ManagedProcess("ptp_ui_pickservers")
@@ -578,6 +584,12 @@ class PtpPnpMainWindow(QMainWindow):
 
     # --------------------------------------------------------------- status UI
     def _refresh_status(self) -> None:
+        # [수정] Hover 골이 비정상 종료(서버 사망 등)해도 _cpp_goal_active 가 영구 고착되지 않게
+        # 타임아웃 화해 — 일정 시간 지나면 래치 해제(픽 버튼 재활성). hover 는 수초면 끝난다.
+        if self._cpp_goal_active and (time.monotonic() - self._cpp_goal_t0) > 60.0:
+            self._cpp_goal_active = False
+            self._update_path_exclusion()
+            self._set_status("Hover 골 타임아웃(60s) — 상호배타 해제")
         self._node_cache = self._bridge.live_node_names()
         cmdlines = self._running_cmdlines()
         for key, p in self._presets.items():
@@ -595,6 +607,11 @@ class PtpPnpMainWindow(QMainWindow):
 
     # ------------------------------------------------------------- action ctrl
     def _run(self) -> None:
+        if self._resident_auto_active:
+            self._set_status("자동 픽 진행 중 — 자동 정지 후 Hover 정렬(디버그)을 쓰세요.")
+            return
+        self.btnRun.setEnabled(False)        # 더블클릭 재진입 방지(완료/거부/실패 시 복구)
+        self._cpp_goal_t0 = time.monotonic()
         ok = self._bridge.run(
             z=self.spnZ.value(),
             roll_deg=self.spnRoll.value(),
@@ -610,10 +627,46 @@ class PtpPnpMainWindow(QMainWindow):
                 f"R={self.spnRoll.value():.0f} P={self.spnPitch.value():.0f} "
                 f"Y={self.spnYaw.value():.0f} arms={self.cmbArms.currentText()}")
             self._set_status("AlignToBoxes 전송됨.")
+        else:
+            self._update_path_exclusion()    # 전송 실패(서버 부재 등) → btnRun 복구
 
     def _cancel(self) -> None:
         self._bridge.cancel()
         self._set_status("Cancel 요청.")
+
+    # ----------------------------------------------- 두 경로 동시구동 차단(상호배타)
+    def _manual_pick(self) -> None:
+        """수동 픽 1회 — C++ Hover(디버그) 경로 진행 중이면 거부(동시구동 차단)."""
+        if self._cpp_goal_active:
+            self._set_status("Hover 정렬(디버그) 진행 중 — Cancel 후 픽을 쓰세요.")
+            return
+        self._pick_bridge.manual_pick(
+            self.comboColorPnp.currentText(),
+            {"좌": "left", "우": "right"}.get(self.comboSidePnp.currentText(), "both"))
+
+    def _auto_stop(self) -> None:
+        """자동 픽 정지 + 상호배타 해제(Hover 버튼 재활성)."""
+        self._pick_bridge.auto_stop()
+        self._resident_auto_active = False
+        self._update_path_exclusion()
+
+    def _on_pick_status(self, s: str) -> None:
+        """resident 픽 서버 상태 표시 + 상호배타 래치 화해.
+        resident watchdog 자가정지("AUTO 자동정지...")면 UI 가 모르고 btnRun 을 영구
+        비활성으로 두지 않도록 _resident_auto_active 를 해제(btnRun 재활성)."""
+        self.lblPnpStatus.setText(f"픽 서버 상태: {s}")
+        if "자동정지" in s and self._resident_auto_active:
+            self._resident_auto_active = False
+            self._update_path_exclusion()
+
+    def _update_path_exclusion(self) -> None:
+        """C++ Hover(디버그) 경로와 resident 픽 경로의 UI 상호배타.
+        같은 controller_manager 를 교차 토글하면 충돌하므로 한쪽 활성 시 다른쪽 비활성."""
+        cpp = self._cpp_goal_active
+        res = self._resident_auto_active
+        self.btnPickOnce.setEnabled(not cpp)
+        self.btnAutoStart.setEnabled(not cpp)
+        self.btnRun.setEnabled(not res and not cpp)   # cpp 활성 중엔 btnRun 도 비활성(더블 발사 방지)
 
     # ---------------------------------------------------------- bridge -> view
     def _on_feedback(self, fb: dict) -> None:
@@ -641,12 +694,18 @@ class PtpPnpMainWindow(QMainWindow):
 
     def _on_goal_state(self, state: str) -> None:
         if state == "accepted":
+            self._cpp_goal_active = True
+            self._update_path_exclusion()
             self._set_status("골 수락됨 — 실행 중.")
         elif state == "rejected":
+            self._cpp_goal_active = False
+            self._update_path_exclusion()
             self._set_status("골 거부됨.")
         elif state == "canceled":
             self._set_status("골 취소 요청 전송됨.")
         elif state == "done":
+            self._cpp_goal_active = False
+            self._update_path_exclusion()
             self._set_status("골 종료.")
 
     # --------------------------------------------------- Detection-tab video
@@ -734,6 +793,9 @@ class PtpPnpMainWindow(QMainWindow):
         """Auto-start picking. "컨테이너 색" 은 색 판단을 UI 가 하지 않는다 — container_pick_gate
         노드가 거리 게이트 + 색 시간-다수결로 /pick_color 를 몬다(UI 는 표시만). 그 외(전체/특정
         색)는 UI 가 색을 직접 지정한다."""
+        if self._cpp_goal_active:
+            self._set_status("Hover 정렬(디버그) 진행 중 — Cancel 후 자동 픽을 쓰세요.")
+            return
         sel = self.comboColorAuto.currentText()
         if sel == "컨테이너 색":
             # 일회성 색 게이트 제거 — 게이트 노드가 컨테이너 유무(거리)·색(다수결)을 연속 판단.
@@ -743,6 +805,8 @@ class PtpPnpMainWindow(QMainWindow):
             self._pick_bridge.auto_start_container()
         else:
             self._pick_bridge.auto_start(sel)
+        self._resident_auto_active = True
+        self._update_path_exclusion()
 
     def _setup_cloud_view(self) -> None:
         """Embed pyqtgraph OpenGL point-cloud views in BOTH right panes (Detection

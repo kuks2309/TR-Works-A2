@@ -86,19 +86,22 @@ GRIP_EFFORT = 1.0         # 무른 박스 으깸 방지(50->10->5->1). 최소 �
 GRIP_DETECT_MARGIN = 0.003   # 절대 임계 폴백(캘리브 실패 시). 평소엔 self.grip_thr 사용
 GRIP_CALIB_MARGIN = 0.001    # 기동 캘리브: 임계 = 측정한 빈손바닥 + 이 값(상대 판정). 드리프트 흡수
 
-IK_EPS, IK_MAX_ITER, IK_DT, IK_DAMP, IK_RESTARTS = 1e-4, 1000, 0.1, 1e-6, 20
+IK_EPS, IK_MAX_ITER, IK_DT, IK_DAMP, IK_RESTARTS = 1e-4, 150, 0.1, 1e-6, 20  # [기술부채] MAX_ITER 1000→150: 비수렴(도달불가) 비용 6.7배↓ (수렴 해는 <100 iter)
+OPTIMAL_FALLBACK_BUDGET_S = 1.5   # [기술부채] solve_pick_optimal 폴백 최대 벽시계[s] — 초과 시 즉시 종료(resident 동기 프리즈 방지)
 RAMP_RATE_DPS = 90.0     # forward position 최대 관절속도 [deg/s] (튜닝: --rate)
-RAMP_HZ = 50.0
+RAMP_HZ = 100.0          # forward 발행 rate [Hz] — 컨트롤러 update_rate(100Hz)에 맞춤.
+                         # 정밀 페이싱(_time.sleep)과 함께 leader-follower처럼 촘촘·매끄럽게 (이전 50)
 JTC_MOVE_TIME = 0.8      # JTC 하강 시간 [s] (튜닝: --descend)
 INIT_TIME = 0.85          # INIT 복귀 시간 [s] (튜닝: --init)
-SETTLE = 0.1             # 이동 후 정착 여유 [s] (튜닝: --settle)
-GRASP_SETTLE = 0.55       # 파지(비차단) 후 정착 [s] (튜닝: --grasp-settle)
-WARMUP_T = 0.1           # JTC 스위치 후 워밍업 궤적 시간 [s]
+SETTLE = 0.05            # 이동 후 정착 여유 [s] (튜닝: --settle) [대기단축 2026-06-09: 0.1→0.05]
+GRASP_SETTLE = 0.45       # 파지(비차단) 후 정착 [s] (튜닝: --grasp-settle) [대기단축: 0.55→0.45]
+WARMUP_T = 0.05          # JTC 스위치 후 워밍업 궤적 시간 [s] [대기단축: 0.1→0.05]
 
 # 중간자세(테이블 충돌 방지): INIT 자세 유지한 채 X +7cm 앞으로, z>=0.75 로 이동
 MID_X_FWD = 0.07         # INIT TCP 에서 X 앞으로 [m]
 MID_MIN_Z = 0.75         # 중간자세 최소 높이 [m]
 PICK_MAX_X = 0.46        # 이 X[m] 이상은 큰(place) 박스 검출 -> 미니박스 픽 대상에서 제외
+PICK_MIN_X = 0.18        # [기술부채] 이 X[m] 미만은 베이스 근접 오검출 -> 픽 대상 제외(하한 가드)
 
 # 파지 자세 pitch 상한 [deg]. 비스듬은 유리하나 이 이상 앞으로 숙이면 파지 실패 ->
 # |pitch|<=PITCH_MAX 해를 우선 채택(자연 슬랜티드 유지), 과도하면 다른 IK 해 탐색.
@@ -164,6 +167,7 @@ class PickV2(Node):
                              history=QoSHistoryPolicy.KEEP_LAST)
         self.urdf = None
         self.box = None
+        self.box_stamp = None    # [기술부채] 최근 /detected_boxes 수신 시각(stale-box 가드용)
         self.boxes = []
         self.state = {}
         self.create_subscription(String, "/robot_description", self._urdf_cb, latched)
@@ -183,17 +187,23 @@ class PickV2(Node):
             self.urdf = m.data
 
     def _box_cb(self, m):
-        if m.poses:
-            self.boxes = [(p.position.x, p.position.y, p.position.z) for p in m.poses]
-            # 측면 분담(중앙 Y=0 기준): 오른쪽(Y<0)=오른팔, 왼쪽(Y>0)=왼팔.
-            # 그 중 X 최소(가까울수록 쉽게 잡음 — far 신전/droop 회피)를 선택.
-            # X>=PICK_MAX_X 는 큰(place) 박스 검출 -> 픽 대상 제외. 측면(중앙 Y=0)으로 좌우 분담.
-            if SIDE == "right":
-                cand = [b for b in self.boxes if b[1] < 0.0 and b[0] < PICK_MAX_X]
-            else:
-                cand = [b for b in self.boxes if b[1] > 0.0 and b[0] < PICK_MAX_X]
-            # 엄격 분리: 자기 측면에 박스 없으면 안 잡고 대기(None). 반대편으로 절대 안 넘어감.
-            self.box = min(cand, key=lambda b: b[0]) if cand else None
+        # [기술부채] 빈 검출도 반영해 stale 박스로 발사하는 것을 방지 + 검출 수신 시각 기록.
+        self.box_stamp = self.get_clock().now()
+        if not m.poses:
+            self.boxes = []
+            self.box = None
+            return
+        self.boxes = [(p.position.x, p.position.y, p.position.z) for p in m.poses]
+        # 측면 분담: 오른쪽(Y<0)=오른팔, 왼쪽(Y>=0)=왼팔 [Y==0 데드존 제거 — 좌팔이 담당].
+        # X 범위 [PICK_MIN_X, PICK_MAX_X): 하한=베이스 근접 오검출 제외, 상한=큰(place) 박스 제외.
+        # 자기 측면 X 최소(가까울수록 쉽게 잡음)를 선택. 엄격 분리(반대편 안 넘어감).
+        def _valid(b):
+            return PICK_MIN_X <= b[0] < PICK_MAX_X
+        if SIDE == "right":
+            cand = [b for b in self.boxes if b[1] < 0.0 and _valid(b)]
+        else:
+            cand = [b for b in self.boxes if b[1] >= 0.0 and _valid(b)]
+        self.box = min(cand, key=lambda b: b[0]) if cand else None
 
     def _js_cb(self, m):
         for n, p in zip(m.name, m.position):
@@ -347,7 +357,10 @@ class PickV2(Node):
         cur = self.arm_q()
         valids = []   # (motion, pitch, yaw, qa, ea, ta)
         tries = 0
+        t_start = _time.monotonic()   # [기술부채] 벽시계 예산 — 도달불가 박스 수십초 동기 차단 방지
         for i in range(MAX_TRIES):
+            if _time.monotonic() - t_start > OPTIMAL_FALLBACK_BUDGET_S:
+                break
             tries += 1
             sd = seed if i == 0 else pin.randomConfiguration(self.model)
             qa, _, ea, ta = self.solve_pos(bx, by, APPROACH_Z, sd)
@@ -410,13 +423,20 @@ class PickV2(Node):
         ea = 99.0
         az = APPROACH_Z
         z = APPROACH_Z
-        while z >= DESCEND_Z + 0.05 - 1e-9:
+        z_low = min(DESCEND_Z + 0.05, APPROACH_Z)   # [기술부채] 고-z 검출에서도 최소 1회(APPROACH_Z) 실행 보장 → 항상 느린 폴백行 방지
+        while z >= z_low - 1e-9:
             q_, _, e_, t_ = self.solve_pose(bx, by, z, R, seed)
             if e_ < ea:
                 qa, ta, ea, az = q_, t_, e_, z
             if e_ <= 8.0:
                 break
             z -= 0.01
+        if qa is None:
+            # z-루프 미실행(접근 도달불가: DESCEND_Z+0.05 > APPROACH_Z, 보통 z 높은/이상 검출).
+            # 이전엔 qa=None 으로 solve_pose(None) → None.copy() 크래시 → resident 사망.
+            # 여기서 실패 반환 → run_pick 이 solve_pick_optimal 폴백으로 안전 처리.
+            return (None, 99.0, None, None, 99.0, None,
+                    f"기준자세 접근 도달불가 (DESCEND_Z={DESCEND_Z:.2f}+0.05 > 접근 {APPROACH_Z:.2f})", False)
         qd, _, ed, td = self.solve_pose(bx, by, DESCEND_Z, R, qa)
         ok = (ed <= 5.0 and ea <= 35.0)        # 파지(하강) 엄격, 접근은 도달가능 best
         info = (f"기준자세 tilt={tilt:.1f}° (roll{roll0:.0f}/yaw{yaw0:+.1f}) "
@@ -462,12 +482,15 @@ class PickV2(Node):
         return ok
 
     # ---------- moves
-    def forward_ramp(self, q_target_arm, label):
-        """현재 측정값에서 목표까지 rate-limit 램프 (forward position)."""
+    def forward_ramp(self, q_target_arm, label, settle=True, seed=None):
+        """rate-limit 램프 (forward position). 최종 명령값(cmd) 반환.
+        settle=False: 끝에서 정지 유지 없이 즉시 반환 → 다음 램프로 '경유점 통과'.
+        seed: 시작 cmd(None=현재 측정값 arm_q). 통과 체인에서 직전 램프의 끝 cmd를 넘기면
+        seam 에서 arm_q 재독으로 생기던 명령 점프(불연속)가 사라져 한 번에 이어 움직인다."""
+        cmd = np.array(seed, dtype=float) if seed is not None else self.arm_q()
         if not np.all(np.isfinite(q_target_arm)):
             print(f"   [{label}] NaN/inf 타깃 — 램프 중단(발행 안 함)")
-            return
-        cmd = self.arm_q()
+            return cmd
         max_step = math.radians(RAMP_RATE_DPS) / RAMP_HZ
         n = 0
         while True:
@@ -476,16 +499,20 @@ class PickV2(Node):
                 break
             cmd = cmd + np.clip(d, -max_step, max_step)
             self.fpos_pub.publish(Float64MultiArray(data=[float(v) for v in cmd]))
-            self.wait(1.0 / RAMP_HZ)
+            rclpy.spin_once(self, timeout_sec=0.0)   # [기술부채] 램프 중 콜백 처리(_js_cb) → self.state 최신
+            _time.sleep(1.0 / RAMP_HZ)   # 정밀 페이싱(균일 간격) — leader-follower식 매끄러운 스트림
             n += 1
             if n > 600:
                 print(f"   [{label}] 램프 스텝 상한(600) 도달 — 중단")
                 break
-        # settle: 목표 유지
-        for _ in range(int(RAMP_HZ * SETTLE)):
-            self.fpos_pub.publish(Float64MultiArray(data=[float(v) for v in q_target_arm]))
-            self.wait(1.0 / RAMP_HZ)
-        print(f"   [{label}] forward-ramp 완료 ({n} steps)")
+        # settle: 목표 유지 (경유점 통과 시 settle=False 로 멈춤 제거)
+        if settle:
+            for _ in range(int(RAMP_HZ * SETTLE)):
+                self.fpos_pub.publish(Float64MultiArray(data=[float(v) for v in q_target_arm]))
+                rclpy.spin_once(self, timeout_sec=0.0)
+                _time.sleep(1.0 / RAMP_HZ)   # 정밀 페이싱(균일 간격)
+        print(f"   [{label}] forward-ramp 완료 ({n} steps{'' if settle else ', 통과'})")
+        return cmd
 
     def _jtc_send(self, q_target_arm, t, label):
         for _ in range(50):

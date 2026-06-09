@@ -6,6 +6,14 @@ for OpenArmX, using a **direct point-to-point (PTP) move** as the motion backend
 **Detection/3D is NOT done here** — it is a separate perception node
 (`box_perception_node`); this node only consumes its `/detected_boxes`.
 
+> **[SSOT 2026-06-09] 이 노드는 hover 정렬(디버그/테스트)용으로 격하되었다.** 실제
+> pick&place 정본(canonical)은 resident Python 경로(`ptp_pick_resident.py` +
+> `box_detect_loop.py` + `container_pick_gate.py` + UI 의 `ptp_pick_bridge.py`)이며
+> 하강·파지·놓기 end-to-end 를 수행한다. 이 노드는 박스 위 **hover 정렬만** 한다(파지·놓기 없음).
+> 두 경로가 같은 `controller_manager` 를 교차 토글하면 충돌하므로 UI 에서 상호배타하며
+> (`btnRun` "Hover 정렬(디버그)" ↔ Pick&Place 탭 수동/자동), **자동 pick&place 루프를 이 노드에
+> 얹지 말 것.**
+
 ```
 box_perception_node (perception: detect + 3D)  ─▶  /detected_boxes (PoseArray, base)
         │

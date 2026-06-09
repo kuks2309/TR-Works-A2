@@ -37,6 +37,11 @@
 #include <thread>
 #include <vector>
 
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
@@ -586,9 +591,50 @@ private:
 
   void execute(const std::shared_ptr<GoalHandle> gh)
   {
+    // [경로 상호배타·EX] 정본 pick&place 는 resident 경로(SH 락)다. 이 hover 디버그 노드는
+    // resident 가 모션 중이면(SH 보유) 같은 controller_manager 를 동시에 만지지 않도록 EX 락
+    // 획득에 실패하면 즉시 abort. 함수 종료 시 RAII 로 해제. (/tmp 미기록 등 open 실패 시엔
+    // 디버그 도구를 막지 않도록 락 없이 진행.)
+    const int path_fd = ::open("/tmp/openarmx_motion_path.lock", O_RDWR | O_CREAT, 0666);
+    if (path_fd < 0) {   // fail-SAFE: 락을 열 수 없으면(권한/디스크 등) 모션 거부(조용한 진행 금지)
+      auto busy = std::make_shared<AlignToBoxes::Result>();
+      busy->success = false;
+      busy->message = "motion-path lock open failed — refuse to move (fail-safe)";
+      RCLCPP_ERROR(this->get_logger(),
+                   "AlignToBoxes refused: cannot open motion-path lock (errno=%d).", errno);
+      gh->abort(busy);
+      return;
+    }
+    if (::flock(path_fd, LOCK_EX | LOCK_NB) != 0) {   // resident SH 보유 중 → busy
+      ::close(path_fd);
+      auto busy = std::make_shared<AlignToBoxes::Result>();
+      busy->success = false;
+      busy->message = "busy: resident pick path active (motion-path lock held)";
+      RCLCPP_WARN(this->get_logger(),
+                  "AlignToBoxes refused: resident pick path holds the motion lock.");
+      gh->abort(busy);
+      return;
+    }
+    struct PathLockGuard {
+      int fd;
+      ~PathLockGuard() { if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } }
+    } path_guard{path_fd};
+
     const auto goal = gh->get_goal();
     auto result = std::make_shared<AlignToBoxes::Result>();
     const Eigen::Matrix3d R = rpyDegToRot(goal->roll_deg, goal->pitch_deg, goal->yaw_deg);
+
+    // [4] 협조적 취소: Cancel 요청 시 단계 경계에서 깨끗이 종료(현재 단계까지만 진행).
+    //     램프 도중 즉시정지는 sendForwardRamp 내부 폴링이 필요 — 별도 트랙.
+    auto check_cancel = [&]() -> bool {
+      if (gh->is_canceling()) {
+        result->success = false;
+        result->message = "canceled at step boundary";
+        gh->canceled(result);
+        return true;
+      }
+      return false;
+    };
 
     feedback(gh, "reading_boxes", 0.1f);
     auto boxes = currentBoxes();
@@ -609,6 +655,7 @@ private:
       return;
     }
 
+    if (check_cancel()) return;
     feedback(gh, "assigning", 0.4f);
     std::string want = goal->arms.empty() ? "both" : goal->arms;
     std::transform(want.begin(), want.end(), want.begin(), ::tolower);
@@ -677,6 +724,7 @@ private:
                     "%s: IK did not converge (residual %.4g); sending best-effort.",
                     side.c_str(), residual);
       }
+      if (check_cancel()) return;
       feedback(gh, "moving", 0.8f);
       bool moved;
       if (use_forward_position_) {
