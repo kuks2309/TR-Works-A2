@@ -31,9 +31,15 @@
           <property name="title">
            <string>영상 (좌: 카메라 + YOLO 오버레이 · 우: 3D 포인트클라우드)</string>
           </property>
-          <layout class="QHBoxLayout" name="imgLayoutPnp">
+          <layout class="QHBoxLayout" name="imgLayoutPnp" stretch="1,1">
            <item>
             <widget class="QLabel" name="imgCamPnp">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+               <horstretch>1</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
              <property name="minimumSize">
               <size>
                <width>320</width>
@@ -54,6 +60,12 @@
            </item>
            <item>
             <widget class="QWidget" name="cloudHolderPnp" native="true">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+               <horstretch>1</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
              <property name="minimumSize">
               <size>
                <width>320</width>
@@ -351,9 +363,15 @@
           <property name="title">
            <string>영상 (좌: 카메라 + YOLO 오버레이 · 우: 3D 포인트클라우드)</string>
           </property>
-          <layout class="QHBoxLayout" name="imgLayout">
+          <layout class="QHBoxLayout" name="imgLayout" stretch="1,1">
            <item>
             <widget class="QLabel" name="imgCam">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+               <horstretch>1</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
              <property name="minimumSize">
               <size>
                <width>320</width>
@@ -374,6 +392,12 @@
            </item>
            <item>
             <widget class="QWidget" name="cloudHolder" native="true">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Ignored" vsizetype="Expanding">
+               <horstretch>1</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
              <property name="minimumSize">
               <size>
                <width>320</width>
