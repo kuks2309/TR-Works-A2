@@ -39,13 +39,14 @@ class PtpPickBridge(QObject):
         if not rclpy.ok():
             rclpy.init()
         self._node = Node("ptp_pick_ui_bridge")
-        self._color_pub = self._node.create_publisher(String, "/pick_color", 10)
-        self._dual_pub = self._node.create_publisher(Bool, "/allow_dual_arm", 10)
-        # 컨테이너 자동(거리 게이트+색 다수결) 활성 신호. container_pick_gate 노드가 수신해
-        # 활성일 때만 /pick_color 를 몬다(수동·타 색 자동과 충돌 방지). latched(늦게 떠도 수신).
+        # /pick_color·/container_follow_active 공용 latched QoS. resident 구독이
+        # TRANSIENT_LOCAL(LATCHED)이라 발행도 TRANSIENT_LOCAL 이어야 durability 호환 +
+        # 늦게/재시작한 resident 도 마지막 색 즉시 수신(VOLATILE 발행 시 resident 미수신).
         latched = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.RELIABLE,
                              durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
                              history=QoSHistoryPolicy.KEEP_LAST)
+        self._color_pub = self._node.create_publisher(String, "/pick_color", latched)
+        self._dual_pub = self._node.create_publisher(Bool, "/allow_dual_arm", 10)
         self._follow_pub = self._node.create_publisher(Bool, "/container_follow_active", latched)
         self._follow_pub.publish(Bool(data=False))   # 기본 비활성(수동/타 발행자에 /pick_color 양보)
         self._pick, self._auto_on, self._auto_off = {}, {}, {}

@@ -65,7 +65,8 @@ class ContainerPickGate(Node):
                              history=QoSHistoryPolicy.KEEP_LAST)
         self.create_subscription(String, "/place_box/info", self._on_info, 10)
         self.create_subscription(Bool, "/container_follow_active", self._on_active, latched)
-        self.pub_color = self.create_publisher(String, "/pick_color", 10)
+        # /pick_color 는 resident 가 LATCHED(TRANSIENT_LOCAL)로 구독 → 발행도 latched 여야 호환.
+        self.pub_color = self.create_publisher(String, "/pick_color", latched)
         self.pub_status = self.create_publisher(String, "~/status", 10)
         self.create_timer(1.0 / max(1.0, self.publish_hz), self._tick)
         print(f"[container_gate] 시작 mode={self.mode} dist=[{self.dist_min},{self.dist_max}] "
