@@ -7,6 +7,22 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-09 (KST) — ptp UI(User Interface) 3D 포인트클라우드 좌우 거울 반전 (표시용 Y-only 반전이 단일축 reflection)
+
+### 증상
+Detection·Pick and Place 탭의 우측 3D 포인트클라우드가 좌측 카메라 영상과 **좌우가 거울처럼 뒤집혀** 표시됨(상하는 정상). 좌측 영상에서 오른쪽에 있는 박스가 클라우드에선 왼쪽에 나타남.
+
+### 원인
+`_on_cloud` 가 카메라 optical 프레임(+X 오른쪽/+Y 아래/+Z 전방) 클라우드를 **Y축만 음수화**([main_window.py:848](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/main_window.py#L848), 상하 일치 목적)했다. 그러나 단일축 음수화는 회전이 아니라 **거울 반사(reflection, 오른손→왼손 좌표계)** 다. 게다가 GL(OpenGL) 뷰가 `azimuth=90, elevation=-65`([main_window.py:831](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/main_window.py#L831)) 라 pyqtgraph viewMatrix 투영상 **화면 가로 = -X_opt** → optical 오른쪽이 화면 왼쪽에 찍혀 좌우 반전.
+
+### 수정
+표시용 사본 `pos` 에 **X축도 함께 음수화**(커밋 c887659, [main_window.py:851](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_ui/openarmx_ptp_ui/main_window.py#L851), +7/-3). X·Y 동시 음수화 = **Z축 180° 정상회전(det=+1, 거울 아님)** → 화면 가로 = +X_opt 로 좌우가 영상과 일치. 상하는 Y·Z 에만 의존하므로 불변. 실좌표·pick/grasp 계산은 `xyz.copy()` 사본이라 미변경(표시 전용). viewMatrix numpy 투영 검증: +X(영상 오른쪽)→화면 오른쪽, ey(상하) 두 경우 동일.
+
+### 재발 방지
+좌표계 정렬은 **단일축 음수화(거울) 대신 짝수개 축 음수화/정상회전**으로. UI(User Interface) 표시·레이아웃 수정은 실행 프로세스 재기동 후 확인([[feedback_ui_layout_verify_screenshot]]). 미커밋 `.py` 수정은 사용자의 merge/commit 시 유실될 수 있으니 적용 후 즉시 커밋.
+
+---
+
 ## 2026-06-09 (KST) — 컨테이너 자동 픽: 색 라벨 불신뢰(place_box+yolo)로 노란 박스 못 집음 → 거리 게이트 + agnostic
 
 ### 증상
