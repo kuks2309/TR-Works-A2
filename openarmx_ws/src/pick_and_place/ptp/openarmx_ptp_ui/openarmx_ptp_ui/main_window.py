@@ -413,6 +413,12 @@ class PtpPnpMainWindow(QMainWindow):
             getattr(self, stop).setStyleSheet(_BTN_RED_QSS)
         self.btnRun.setStyleSheet(_BTN_GREEN_QSS)
         self.btnCancel.setStyleSheet(_BTN_RED_QSS)
+        # 픽 서버 버튼(Launch 탭 row + Pick&Place 탭)은 preset 이 아니라 _pick_srv_proc 재사용 →
+        # 여기서 직접 초록/빨강 스타일 적용(다른 행과 동일하게).
+        self.btnPickSrvLaunchStart.setStyleSheet(_BTN_GREEN_QSS)
+        self.btnPickSrvLaunchStop.setStyleSheet(_BTN_RED_QSS)
+        self.btnSrvStart.setStyleSheet(_BTN_GREEN_QSS)
+        self.btnSrvStop.setStyleSheet(_BTN_RED_QSS)
 
     def _wire_launch_rows(self) -> None:
         for key, p in self._presets.items():
@@ -567,6 +573,11 @@ class PtpPnpMainWindow(QMainWindow):
             for pat in (self._presets[key].get("procs", [])
                         + self._presets[key].get("sweep", [])):
                 self._kill_pattern(pat)
+        # 픽 서버(preset 아님, _pick_srv_proc) 도 함께 정지 + 고아 정리.
+        self._pick_srv_proc.stop()
+        for pat in ("ptp_pick_servers.launch", "ptp_pick_resident",
+                    "box_detect_loop", "container_pick_gate"):
+            self._kill_pattern(pat)
         self._set_status("Stop All (this UI) 실행됨.")
         self._refresh_status()
 
