@@ -841,10 +841,14 @@ class PtpPnpMainWindow(QMainWindow):
                 holder.layout().addWidget(QLabel(f"3D 뷰 사용 불가: {e}"))
 
     def _on_cloud(self, xyz, rgba) -> None:
-        # Cloud는 카메라 optical 프레임(+X 오른쪽, +Y 아래, +Z 깊이). GL 뷰는 화면
-        # 수직축이 +Y를 위로 매핑해 좌측 영상과 상하가 뒤집혀 보임 → 표시용으로만
-        # Y 부호 반전(데이터 사본, 실좌표는 미변경)하여 영상과 위/아래를 일치시킨다.
+        # Cloud는 카메라 optical 프레임(+X 오른쪽, +Y 아래, +Z 깊이/전방). 표시용으로만
+        # (데이터 사본, 실좌표·pick 계산은 미변경) 영상과 좌우·상하를 일치시킨다.
+        # GL 뷰(azimuth=90, elevation=-65)에서 화면 가로=-X_opt, 세로≈-Y_opt 라
+        # Y만 뒤집으면 상하는 맞지만 단일축 반사(reflection)라 좌우가 거울처럼 뒤집힌다.
+        # → X도 함께 뒤집어(= Z축 180° 정상회전, 거울 아님) 좌우까지 영상과 일치시킨다
+        # (상하는 Y·Z 에만 의존하므로 X 반전의 영향 없음).
         pos = xyz.copy()
+        pos[:, 0] = -pos[:, 0]
         pos[:, 1] = -pos[:, 1]
         for scatter in self._cloud_scatters:
             scatter.setData(pos=pos, color=rgba, size=2.0)
