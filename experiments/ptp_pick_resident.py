@@ -23,7 +23,8 @@ import numpy as np
 
 ARM_LOCK_PATH = "/tmp/openarmx_arm_pick.lock"   # 양팔 동시 동작 금지(프로세스 간 뮤텍스)
 MOTION_PATH_LOCK = "/tmp/openarmx_motion_path.lock"  # C++ Hover(EX) vs resident pick(SH) 경로 상호배타
-AUTO_BOX_MAX_AGE = 5.0   # /detected_boxes 가 이보다 오래되면 stale(검출 끊김) — 픽 안 함
+AUTO_BOX_MAX_AGE = 30.0  # /detected_boxes 가 이보다 오래되면 stale → 픽 스킵. 검출 게이팅이 모션(~15s)
+                         # 중 검출을 멈추므로 픽 사이클보다 길게(정상 게이팅을 stale 로 오판 방지)
 AUTO_FAULT_LIMIT = 5     # auto 에서 연속 '고장' 이 횟수면 자동정지(무한 busy-retry 방지)
 
 def _pop_side(argv):
@@ -328,10 +329,11 @@ class ResidentPick:
             self._last_motion_end = self.node.get_clock().now()  # 재검출 핸드셰이크 기준
 
     def _watch_auto(self, r):
-        """auto 진전 감시: 연속 '고장'(도달불가/SAFE-ABORT/switch 실패/예외/stale) 시 auto 자동정지.
-        no_box/busy_*/await_fresh = 정상 대기(고장 아님) → streak 리셋."""
+        """auto 진전 감시: 연속 '고장'(도달불가/SAFE-ABORT/switch 실패/예외) 시 auto 자동정지.
+        no_box/busy_*/await_fresh/stale_box = 정상 대기(고장 아님) → streak 리셋.
+        (stale_box 는 검출 게이팅·간헐 검출로 정상 발생 → 고장 집계 금지: 안 움직이는 팔 오정지 방지.)"""
         info = (r or {}).get("info", "")
-        faults = ("unreachable", "SAFE-ABORT", "switch_fail", "exception", "stale_box")
+        faults = ("unreachable", "SAFE-ABORT", "switch_fail", "exception")
         if any(k in info for k in faults):
             self._fault_streak += 1
             if self._fault_streak >= AUTO_FAULT_LIMIT:
