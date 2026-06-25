@@ -415,6 +415,10 @@ class PtpPnpMainWindow(QMainWindow):
         # 여기서 직접 초록/빨강 스타일 적용(다른 행과 동일하게).
         self.btnPickSrvLaunchStart.setStyleSheet(_BTN_GREEN_QSS)
         self.btnPickSrvLaunchStop.setStyleSheet(_BTN_RED_QSS)
+        # Pick&Place 탭 픽 실행 버튼: 수동 실행·자동 시작=초록, 자동 정지=빨강.
+        self.btnPickOnce.setStyleSheet(_BTN_GREEN_QSS)
+        self.btnAutoStart.setStyleSheet(_BTN_GREEN_QSS)
+        self.btnAutoStop.setStyleSheet(_BTN_RED_QSS)
 
     def _wire_launch_rows(self) -> None:
         for key, p in self._presets.items():
