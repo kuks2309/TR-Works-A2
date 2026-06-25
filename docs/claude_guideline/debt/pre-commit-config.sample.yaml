@@ -1,0 +1,15 @@
+# .pre-commit-config.yaml — debt 번들 로컬 강제
+# 설치: pip install pre-commit && pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: debt-check-mapping
+        name: debt ⟦CI⟧ 태그↔스크립트 정합
+        entry: docs/claude_guideline/debt/checks/check-mapping.sh
+        language: system
+        pass_filenames: false
+      - id: debt-marker
+        name: TODO/FIXME/HACK 가 debt id 참조 (맨 마커 차단)
+        entry: docs/claude_guideline/debt/checks/debt-marker.sh
+        language: system
+        pass_filenames: false

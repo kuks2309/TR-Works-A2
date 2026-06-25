@@ -1,0 +1,34 @@
+# coding-gates.yml — coding 번들 서버 강제 (GitHub Actions 예시)
+# .github/workflows/ 로 복사해 활성. 진짜 인터록은 여기(우회불가)에 있다.
+name: coding-gates
+on: [push, pull_request]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⟦CI⟧ 태그↔스크립트 정합 (메타)
+        run: bash docs/claude_guideline/coding/checks/check-mapping.sh
+
+      - name: 금지 패턴
+        run: bash docs/claude_guideline/coding/checks/banned-pattern.sh .
+
+      - name: 코드 포맷
+        run: bash docs/claude_guideline/coding/checks/format.sh .
+
+      - name: 중복 함수 시그니처
+        run: bash docs/claude_guideline/coding/checks/dup-signature.sh .
+
+      - name: 인덱스 신선도
+        run: bash docs/claude_guideline/coding/checks/index-fresh.sh .
+
+      - name: 메모리 안전 (clang-tidy + asan)
+        run: bash docs/claude_guideline/coding/checks/memory.sh .
+
+      - name: ADR 필수 필드
+        run: bash docs/claude_guideline/coding/checks/adr-fields.sh .
+
+      - name: 테스트 실행·통과
+        run: bash docs/claude_guideline/coding/checks/tests-ran.sh .

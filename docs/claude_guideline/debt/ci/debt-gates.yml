@@ -1,0 +1,16 @@
+# debt-gates.yml — debt 번들 서버 강제 (GitHub Actions 예시)
+# .github/workflows/ 로 복사해 활성.
+name: debt-gates
+on: [push, pull_request]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⟦CI⟧ 태그↔스크립트 정합 (메타)
+        run: bash docs/claude_guideline/debt/checks/check-mapping.sh
+
+      - name: TODO/FIXME/HACK ↔ debt id
+        run: bash docs/claude_guideline/debt/checks/debt-marker.sh .

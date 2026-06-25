@@ -1,0 +1,36 @@
+# .pre-commit-config.yaml — coding 번들 로컬 강제 (빠른 정적 이빨)
+# 설치: pip install pre-commit && pre-commit install
+# 느린 이빨(tests-ran)은 CI(ci/coding-gates.yml)에 둔다.
+repos:
+  - repo: local
+    hooks:
+      - id: coding-check-mapping
+        name: coding ⟦CI⟧ 태그↔스크립트 정합
+        entry: docs/claude_guideline/coding/checks/check-mapping.sh
+        language: system
+        pass_filenames: false
+      - id: coding-banned-pattern
+        name: 금지 패턴(secret·eval·raw SQL·blocking)
+        entry: docs/claude_guideline/coding/checks/banned-pattern.sh
+        language: system
+        pass_filenames: false
+      - id: coding-format
+        name: 코드 포맷(포맷터 --check)
+        entry: docs/claude_guideline/coding/checks/format.sh
+        language: system
+        pass_filenames: false
+      - id: coding-dup-signature
+        name: 중복 함수 시그니처
+        entry: docs/claude_guideline/coding/checks/dup-signature.sh
+        language: system
+        pass_filenames: false
+      - id: coding-memory
+        name: 메모리 안전(clang-tidy 정적)
+        entry: docs/claude_guideline/coding/checks/memory.sh
+        language: system
+        pass_filenames: false
+      - id: coding-adr-fields
+        name: ADR 필수 필드
+        entry: docs/claude_guideline/coding/checks/adr-fields.sh
+        language: system
+        pass_filenames: false
