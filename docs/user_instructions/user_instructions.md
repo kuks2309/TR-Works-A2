@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-25 22:09 KST — 기록·커밋·푸시 요청
+
+> "기록 커밋 푸쉬"
+
+---
+
+## 2026-06-25 21:26 KST — 오재미 픽앤플레이스 로보틱스 중심 탑다운 보고서(Mermaid 다이어그램) 작성 요청
+
+> "오재미를 픽엔 플레이스 하는것에대해서 로보틱스관점에서 로보틱스 중심적인 보고서를 만들어줘 어떻게 구성했는지 탑다운 구조의 문서를 만들어주고 다이어그램은 멀메이드로 그려줘"
+
+---
+
 ## 2026-06-09 01:06 KST — ptp pick&place UI launch 명령을 a2_pick_and_place alias 로 등록
 
 > "cd ~/TR-Works/kkw/China/openarmx_ws && source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch openarmx_ptp_ui ptp_pnp_ui.launch.py\n를 a2_pick_and_place로 alias에 넣어주세요"
