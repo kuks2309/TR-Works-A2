@@ -7,6 +7,65 @@ China 모노레포 전체의 이슈·원인·수정 누적 기록. 최신 항목
 
 ---
 
+## 2026-06-25 (KST) — box 미검출 = 컨테이너 게이트 hold("none")가 /pick_color 를 덮어씀 (YOLOv8 정상)
+
+### 증상
+mini-box(red/green)가 카메라에 또렷이 보이는데 검출이 안 됨("box 미검출 / 검출이 잘 안됨"). 사용자가 YOLOv8 점검 요청.
+
+### 원인
+YOLOv8/Hailo 는 정상 — 현재 카메라 프레임을 원격 서버(`http://10.42.0.2:8080/detect`)에 직접 POST 하니 red/green 박스 5~6개를 0.96 고신뢰로 검출. 진짜 원인은 색 필터 경로:
+- UI(User Interface) 가 **"컨테이너 자동" 모드 활성**(`/container_follow_active=true`).
+- 컨테이너(place box) 미가시 → `container_pick_gate` 가 `hold_value="none"`(container_pick_gate.py:48) 을 `/pick_color` 로 **5Hz 발행**(상태 "컨테이너 없음 — 대기(hold)").
+- `/pick_color` 발행자 2개(게이트+UI) → 게이트의 "none"(5Hz)이 UI 수동 색 선택을 즉시 덮어씀.
+- `box_detect_loop` 가 "none" 을 "auto" 처럼 특별처리하지 않고 **DetectBox prompts(클래스 화이트리스트)로 그대로 사용**(box_detect_loop.py:77-79) → 존재하지 않는 클래스명 "none" 으로 필터 → 서버가 준 박스 전부 제거 → 라이브 18/18 빈검출.
+
+### 수정 / 대응
+- 운영 해결: UI 에서 **컨테이너 자동 모드 정지**(→ 게이트 "none" 강제 중단) 후 수동(색 선택)/자동 사용. 라이브 토픽 직접 발행은 로봇 구동 위험으로 미수행([[live_topic_test_pollution]]).
+- 잠재 결함(미수정): `box_detect_loop` 가 "none"/hold 값을 받으면 검출 생략 또는 "대기 중" 표기하도록 고쳐야 정상 hold 가 "검출 실패"로 오인되지 않음.
+
+### 재발 방지
+검출 0 일 때 모델부터 의심하지 말 것 — 현재 프레임을 서버에 직접 POST 해 모델/필터를 분리(모델 OK·필터 의심). `/pick_color` 다중 발행자(게이트 vs UI) latched 충돌 주의. [[container_pick_gate_node]] [[openarmx_remote_hailo_bridge]].
+
+---
+
+## 2026-06-25 (KST) — TOF(Time-of-Flight) 미수신 = openarmx 가 dialout 그룹 누락(시리얼 권한 거부)
+
+### 증상
+UI(User Interface) TOF(Time-of-Flight) 표시가 "--- m". `/tof/range` echo 타임아웃(미발행). `tof_serial_driver` 노드는 실행 중, `/dev/ttyACM0` 존재.
+
+### 원인
+`/dev/ttyACM0` 소유 `root dialout`(`crw-rw----`)인데 `id openarmx` 그룹에 **dialout 없음** → 노드가 포트를 못 엶(`/proc/<pid>/fd` 에 ttyACM 없음 = 열기 실패 확정). 시스템 권한 설정 문제(픽 코드 무관).
+
+### 수정 / 대응
+사용자 sudo 필요(미수행):
+- 빠른: `sudo chmod 666 /dev/ttyACM0` → Launch 탭 TOF(Time-of-Flight) Stop→Start.
+- 영구: `sudo usermod -aG dialout openarmx` → 재로그인.
+TOF(Time-of-Flight) 는 place_box 교차검증용이라 mini-box 픽(D435 기반)에는 영향 없음.
+
+### 재발 방지
+시리얼 노드 무응답 시 노드 코드보다 **권한(dialout)·`/proc/<pid>/fd` 포트 개방 여부**부터 확인.
+
+---
+
+## 2026-06-25 (KST) — auto 에서 안 움직이는 팔이 자동정지 = watchdog 의 stale_box 오판 (Claude 결함)
+
+### 증상
+자동(auto) 픽에서 한쪽(왼)팔이 안 움직임. 다른 팔이 모션 중일 때 발생.
+
+### 원인 ([2]검출게이팅 + [3]staleness 상호작용)
+검출 게이팅([2])이 어느 팔이든 모션(~15s) 중이면 `/detected_boxes` 갱신을 멈춘다. 그런데 resident 의 staleness 임계가 5s 라([3], `AUTO_BOX_MAX_AGE=5.0`), 모션 중 안 움직이는 팔이 `stale_box` 를 반복 → `_watch_auto` 가 stale_box 를 '고장'으로 집계 → `AUTO_FAULT_LIMIT`(5) 초과 시 그 팔 auto 자동정지.
+
+### 수정
+[ptp_pick_resident.py](../../openarmx_ws/src/pick_and_place/ptp/openarmx_ptp_pick/openarmx_ptp_pick/ptp_pick_resident.py) (experiments/ + 패키지 사본 동기):
+- `AUTO_BOX_MAX_AGE` 5.0→**30.0**(검출 게이팅으로 멈추는 시간 > 픽 사이클이 되도록).
+- `_watch_auto` faults 튜플에서 **"stale_box" 제거** — 게이팅·간헐검출로 정상 발생하므로 no_box/busy/await_fresh 와 동급의 정상 대기로 분류.
+재기동(픽 서버 Stop→Start) 후 적용.
+
+### 재발 방지
+검출 게이팅(모션 중 검출 정지)과 staleness 게이트는 **임계가 서로 결합**된다 — 게이팅으로 검출이 멈추는 최대시간보다 staleness 임계를 길게. 정상 대기 상태(게이팅/간헐검출 유래)를 '고장'으로 집계하지 말 것. [[verification_must_exercise_call_path]].
+
+---
+
 ## 2026-06-09 (KST) — ptp UI(User Interface) 3D 포인트클라우드 좌우 거울 반전 (표시용 Y-only 반전이 단일축 reflection)
 
 ### 증상
